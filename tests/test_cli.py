@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -176,6 +177,19 @@ class Builds(unittest.TestCase):
             self.assertEqual(sorted(runs[0]), ["props/crate.glb", "props/lantern.glb", "props/rock.glb",
                                                "units/walker-far.glb", "units/walker.glb"])
             self.assertEqual(runs[0], runs[1])
+
+    def test_the_bytes_do_not_depend_on_where_the_project_lives(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = os.path.join(tmp, "out1")
+            done = blendpipe("build", STARTER, first)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            copy = os.path.join(tmp, "a project", "art")        # another path, with a space, and its own temp folder
+            shutil.copytree(STARTER, copy, ignore=shutil.ignore_patterns("__pycache__"))
+            os.makedirs(os.path.join(tmp, "tmp"))
+            env = {"TMPDIR": os.path.join(tmp, "tmp"), "GLTFPACK": GLTFPACK[-1]}      # no node_modules above the copy
+            done = blendpipe("build", copy, os.path.join(tmp, "out2"), env=env)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertEqual(digests(first), digests(os.path.join(tmp, "out2")))
 
     def test_a_broken_model_fails_the_build_and_says_why(self):
         with tempfile.TemporaryDirectory() as tmp:
