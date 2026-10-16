@@ -118,10 +118,11 @@ renderer: cycles on the CPU (Blender gets no GPU context here, and EEVEE needs o
 
 `--renderer auto|eevee|cycles` (or `BLENDPIPE_RENDERER`; the flag wins) overrides the choice. `auto` is EEVEE on a real
 GPU and Cycles otherwise. The Cycles setup is the same scene, light and camera: path tracing on the CPU with the
-OpenImageDenoise denoiser, two bounces and a quarter of EEVEE's sample count. On the starter's walker (12 cores,
-llvmpipe) it took 57 s where EEVEE took 155 s, and the sheet differs from EEVEE's by 1% mean absolute pixel
-difference: the same model, colours and framing, about 1% darker on average. Workbench is no fallback: it needs the
-same OpenGL context as EEVEE. A build without `--sheet` or `--thumbs` never renders and needs none of this.
+OpenImageDenoise denoiser, two bounces and a quarter of EEVEE's sample count, and point lights shade from their
+centre as in EEVEE. On the starter (12 cores, llvmpipe) the build with sheets took 88 to 127 s where EEVEE took 305 s.
+Its five sheets differ from the EEVEE ones by 0.7 to 1.5% mean absolute pixel difference: the same models, colours
+and framing, but creases and the gaps between planks come out darker (Cycles lets a model block the sky's light,
+and EEVEE's sheets here do not show that). Workbench is no fallback: it needs the same OpenGL context as EEVEE. A build without `--sheet` or `--thumbs` never renders and needs none of this.
 
 **Known limits.**
 
