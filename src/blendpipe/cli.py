@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 
@@ -140,6 +141,9 @@ def cmd_new(a):
     if os.path.exists(dest) and os.listdir(dest):
         sys.exit(f"blendpipe: {dest} exists and is not empty")
     shutil.copytree(STARTER, dest, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for d, dirs, files in os.walk(dest):        # copied from a read-only install (Nix, a read-only mount): still yours
+        for name in [d, *(os.path.join(d, n) for n in dirs + files)]:
+            os.chmod(name, os.stat(name).st_mode | stat.S_IWUSR)
     if os.path.exists(os.path.join(dest, "gitignore")):
         os.replace(os.path.join(dest, "gitignore"), os.path.join(dest, ".gitignore"))
     rel = os.path.relpath(dest)

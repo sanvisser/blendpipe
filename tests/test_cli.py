@@ -52,6 +52,27 @@ class New(unittest.TestCase):
             for d, dirs, _ in os.walk(dest):
                 self.assertNotIn("__pycache__", dirs)
 
+    @unittest.skipIf(sys.platform == "win32" or os.geteuid() == 0, "needs read-only files to mean something")
+    def test_new_from_a_read_only_install_makes_a_project_you_can_write_to(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            installed = os.path.join(tmp, "installed")
+            shutil.copytree(STARTER, installed, ignore=shutil.ignore_patterns("__pycache__"))
+            for d, dirs, files in os.walk(installed, topdown=False):
+                for name in [*(os.path.join(d, n) for n in dirs + files), d]:
+                    os.chmod(name, os.stat(name).st_mode & ~0o222)
+            try:
+                with mock.patch.object(cli, "STARTER", installed), contextlib.redirect_stdout(io.StringIO()):
+                    cli.main(["new", os.path.join(tmp, "art")])
+                art = os.path.join(tmp, "art")
+                self.assertTrue(os.path.exists(os.path.join(art, ".gitignore")))
+                for d, dirs, files in os.walk(art):
+                    for name in [d, *(os.path.join(d, n) for n in dirs + files)]:
+                        self.assertTrue(os.access(name, os.W_OK), name)
+            finally:
+                for d, dirs, files in os.walk(installed):
+                    for name in [d, *(os.path.join(d, n) for n in dirs + files)]:
+                        os.chmod(name, os.stat(name).st_mode | 0o200)
+
     def test_new_shows_sheets_with_the_platforms_opener(self):
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as out:
             cli.main(["new", os.path.join(tmp, "art")])
