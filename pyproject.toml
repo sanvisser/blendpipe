@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "blendpipe"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Procedural, deterministic low-poly game assets built headless in Blender: checked against budgets, exported as compressed glb, rendered as review sheets."
 readme = "README.md"
 license = "MIT"
@@ -18,6 +18,9 @@ classifiers = [
 
 [project.scripts]
 blendpipe = "blendpipe.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "blendpipe.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

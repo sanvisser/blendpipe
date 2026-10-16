@@ -80,6 +80,9 @@ work, since nothing is macOS-specific, but hasn't been tried yet.
 
 To update later, run `pipx upgrade blendpipe` (or `pip install --upgrade --force-reinstall git+https://...`).
 
+To install a release instead of the latest commit, see [Releasing](#releasing). Building a project runs its Python, so
+read the [Trust model](#trust-model) before you build one you did not write.
+
 ## Linux
 
 blendpipe builds, checks and exports on Linux without a display or a GPU: Blender runs with `--background`.
@@ -348,6 +351,47 @@ blender --background --factory-startup --python-exit-code 1 \
 
 Keep `--python-exit-code 1`: without it Blender exits 0 when a script fails.
 
+## Trust model
+
+`blendpipe build` runs the project it builds. Its `project.py`, its helper modules and the modules in `models/` are
+Python, and they run inside Blender with the rights of the user who started the build: they can read and write your
+files and use the network. Treat a project the way you treat a `Makefile` or a `setup.py`, and build only projects you
+trust.
+
+- **The code rules are not a sandbox.** The check that reads each module in `models/` refuses imports, `bpy` and
+  unseeded randomness, which is what keeps rebuilds identical. It is a determinism and hygiene check, and code that
+  means to can get round it. At present it does not read `project.py` or the helper modules beside it at all.
+- **gltfpack runs too.** It is looked up in `$GLTFPACK`, then in a `node_modules` folder in the project folder or any
+  folder above it, then on the `PATH`, so whatever is in those places is run as part of the build.
+- **Blender starts with `--factory-startup`.** That ignores your own preferences and uses the defaults, where "Auto Run
+  Python Scripts" is off (checked on Blender 5.2.2), so scripts embedded in a `.blend` file do not run. blendpipe builds
+  from code and opens no `.blend` files.
+
+To build something you do not trust, build it where it can do no harm: in a container or a virtual machine, or on
+Linux in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox that has no network and can write only to the
+project and output folders. For example, from the folder that holds `art` (the project) and `out` (the output), with
+Blender unpacked in `~/.local/opt` and a clone of blendpipe in `~/src/blendpipe`:
+
+```sh
+bwrap --unshare-all --die-with-parent \
+  --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin \
+  --ro-bind /etc/ld.so.cache /etc/ld.so.cache --proc /proc --dev /dev --tmpfs /tmp --setenv HOME /tmp \
+  --ro-bind ~/.local/opt/blender-5.2.2 /blender --ro-bind ~/src/blendpipe /blendpipe \
+  --bind "$PWD/art" /project --bind "$PWD/out" /out \
+  /blender/blender --background --factory-startup --python-exit-code 1 \
+    --python /blendpipe/tools/blender_build.py -- /project /out/assets --no-pack
+```
+
+This is a suggestion, not something blendpipe tests in CI: the paths are those of Debian and Ubuntu, so adjust them to
+your system, and bubblewrap needs unprivileged user namespaces, which some systems restrict. `--unshare-all` gives the
+build an empty network of its own, and everything but `/project`, `/out` and a scratch `/tmp` is read-only or absent.
+`--no-pack` keeps gltfpack and Node out of the sandbox, but the glbs are then uncompressed and may break a model's `kb`
+limit; to compress as usual, also bind a native gltfpack binary into the sandbox and point `GLTFPACK` at it with
+`--setenv`. Review sheets (`--sheet`) are left out because Blender needs more of the machine to render them.
+
+**To report a security problem,** please do not open a public issue. Open a private security advisory instead: on the
+repository's page, choose Security, then "Report a vulnerability".
+
 ## Things worth knowing
 
 - **Look at the sheets after every change.** The checks catch broken rules. Only your eyes catch a hat floating
@@ -378,6 +422,65 @@ python3 -m unittest discover -s tests -t .                       # the CLI, and 
 
 On Linux, GitHub Actions runs both on `ubuntu-latest` with a pinned, checksum-verified Blender
 (`.github/workflows/tests.yml`).
+
+## Releasing
+
+A release is a tag. Pushing one tests that commit, builds the files and publishes them
+(`.github/workflows/release.yml`). Versions are written the way Python writes them, and the tag is a `v` and the
+version: `0.2.0a1`, an alpha, is `v0.2.0a1`, and after it come `0.2.0b1`, `0.2.0rc1` and `0.2.0`.
+
+**To cut a release:**
+
+1. Set `__version__` in `src/blendpipe/__init__.py`. It is the one place the version is written: `pyproject.toml`, the
+   package metadata and `blendpipe --version` all read it from there.
+2. In `CHANGELOG.md`, change the `## [Unreleased]` heading to the version and the date (`## [0.2.0a1] - 2026-10-20`) and
+   add an empty `## [Unreleased]` above it. That section becomes the release notes.
+3. Merge both to the default branch, then tag the merged commit and push the tag:
+
+   ```sh
+   git tag -a v0.2.0a1 -m "blendpipe 0.2.0a1"
+   git push origin v0.2.0a1
+   ```
+
+**What the workflow checks,** in this order. It publishes nothing if one of them fails.
+
+1. The tests, the same as on a pull request, pass on the tagged commit.
+2. The tag is `v` plus `__version__`, the version is written the way Python normalises it (`0.2.0a1`, not
+   `0.2.0-alpha.1`), and the changelog has a section for it.
+3. The sdist and the wheel build with the exact versions of `build` and `setuptools` pinned, with their hashes, in
+   `.github/release-requirements.txt`. The build fetches nothing else.
+4. The wheel installs in a clean environment, reports the version of the tag and carries the starter project.
+5. `SHA256SUMS` is written and checked.
+
+It then creates a GitHub release for the tag with the sdist, the wheel and `SHA256SUMS`, marked as a pre-release when
+the version has an `a`, `b`, `rc` or `dev` part. Only that job can write to the repository, with the built-in token,
+and nothing goes to PyPI. If a check fails, fix the cause, remove the tag (`git push --delete origin v0.2.0a1` and
+`git tag -d v0.2.0a1`) and tag again.
+
+**To use a release,** pin it in one of two ways:
+
+- *By checksum.* Download the files into one folder (from the release page, or with `gh release download v0.2.0a1
+  --repo sanvisser/blendpipe`), check them, and install the file you checked:
+
+  ```sh
+  sha256sum --check SHA256SUMS            # on macOS: shasum -a 256 --check SHA256SUMS
+  pipx install ./blendpipe-0.2.0a1-py3-none-any.whl
+  ```
+
+  `SHA256SUMS` comes from the same place as the files, so it catches a damaged download but not a changed release. To
+  pin against that too, keep the hash in your own repository, in a `requirements.txt`:
+
+  ```
+  blendpipe @ https://github.com/sanvisser/blendpipe/releases/download/v0.2.0a1/blendpipe-0.2.0a1-py3-none-any.whl \
+      --hash=sha256:<the hash from SHA256SUMS>
+  ```
+
+  and install it with `pip install --require-hashes -r requirements.txt`.
+- *By tag and commit.* Vendor or install blendpipe at the tag, and write down the commit as well, because a tag can be
+  moved and a commit cannot: `git clone --branch v0.2.0a1 https://github.com/sanvisser/blendpipe.git tools/blendpipe`,
+  then `git -C tools/blendpipe rev-parse HEAD`. As a submodule, check out the tag inside it and commit: the project
+  that holds the submodule records the commit. For pipx, `pipx install
+  git+https://github.com/sanvisser/blendpipe.git@<commit>`.
 
 ## License
 
