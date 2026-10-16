@@ -174,8 +174,11 @@ Faces run counter-clockwise seen from outside. Every primitive in `geo` does thi
 
 A model module may import only `blendpipe`, `math`, `mathutils`, `random` and the helper modules beside
 `project.py`. It never imports `bpy`, and it uses randomness only as `random.Random(<number>)`. The build checks this
-by reading the code, because it is what keeps rebuilds identical. Code that needs more, such as numpy textures, goes in
-a helper module (see `patterns.py` in the starter).
+by reading the code, because it is what keeps rebuilds identical. For the same reason it refuses
+`mathutils.noise.seed_set` and the `noise.random*` functions, which share one random state for the whole session. The
+rest of `mathutils.noise` (`noise.noise`, `noise.turbulence`, `noise.cell` and so on) gives the same answer for the
+same input and is fine. Code that needs more, such as numpy textures, goes in a helper module (see `patterns.py` in
+the starter).
 
 ## A project
 

@@ -25,6 +25,9 @@ DEFAULT_CONTACT = 0.03
 ALLOWED_IMPORTS = {"blendpipe", "math", "mathutils", "random"}
 FORBIDDEN_NAMES = {"bpy", "bmesh", "exec", "eval", "open", "compile", "__import__", "globals"}
 FORBIDDEN_ATTRIBUTES = {"bpy", "bmesh", "ops", "context"}
+NOISE = "mathutils.noise"
+NOISE_WHY = ("it draws on a random state shared by the whole session, so a rebuild is not the same; "
+             "use random.Random(<number>)")
 
 
 class Problems:
@@ -46,11 +49,14 @@ class Problems:
 def code(path, problems, allowed=(), root=None):
     """A model module builds from the kit only: it imports only blendpipe, math, mathutils, random and the
     project's own modules (allowed), never Blender itself, and uses randomness only as random.Random(<number>), so a
-    rebuild is the same."""
+    rebuild is the same. That rules out mathutils.noise.seed_set and the noise.random functions too, which share one
+    random state; the rest of mathutils.noise (noise.noise, turbulence, cell, ...) gives the same value for the same
+    input and is fine."""
     name = os.path.relpath(path, root) if root else os.path.basename(path)
     ok = ALLOWED_IMPORTS | set(allowed)
     with open(path) as f:
         tree = ast.parse(f.read(), path)
+    imported = _imported(tree)
     for node in ast.walk(tree):
         where = f"{name}:{getattr(node, 'lineno', '?')}"
         if isinstance(node, ast.Import):
@@ -65,6 +71,8 @@ def code(path, problems, allowed=(), root=None):
                     problems.add(f"{where}: imports {alias.name}")
                 if node.module == "random" and alias.name != "Random":
                     problems.add(f"{where}: imports random.{alias.name}; use random.Random(<number>)")
+                if node.module == NOISE and _shared_state(f"{NOISE}.{alias.name}"):
+                    problems.add(f"{where}: imports {NOISE}.{alias.name}; {NOISE_WHY}")
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
             problems.add(f"{where}: uses {node.id}")
         elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_ATTRIBUTES:
@@ -72,6 +80,8 @@ def code(path, problems, allowed=(), root=None):
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "random":
             if node.attr != "Random":
                 problems.add(f"{where}: random.{node.attr}; use random.Random(<number>), so a rebuild is the same")
+        elif isinstance(node, ast.Attribute) and _shared_state(_dotted(node, imported)):
+            problems.add(f"{where}: {_dotted(node, imported)}; {NOISE_WHY}")
         elif isinstance(node, ast.Call) and _called(node) == "Random":
             if len(node.args) != 1 or not isinstance(node.args[0], ast.Constant) or \
                     not isinstance(node.args[0].value, int) or node.keywords:
@@ -81,6 +91,40 @@ def code(path, problems, allowed=(), root=None):
 def _called(call):
     f = call.func
     return f.attr if isinstance(f, ast.Attribute) else f.id if isinstance(f, ast.Name) else None
+
+
+def _imported(tree):
+    """What each name the module imports stands for: {"nz": "mathutils.noise", "mu": "mathutils", ...}."""
+    names = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    names[alias.asname] = alias.name
+                else:
+                    names[alias.name.split(".")[0]] = alias.name.split(".")[0]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    return names
+
+
+def _dotted(node, imported):
+    """A chain of attributes such as nz.random as the full name its imports give it (mathutils.noise.random), or None
+    when it does not start from a plain name."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    return ".".join([imported.get(node.id, node.id), *reversed(parts)])
+
+
+def _shared_state(dotted):
+    """Whether a full name is mathutils.noise.seed_set or one of the mathutils.noise.random* functions."""
+    module, _, name = (dotted or "").rpartition(".")
+    return module == NOISE and (name == "seed_set" or name.startswith("random"))
 
 
 # ---------------------------------------------------------------- the built model
