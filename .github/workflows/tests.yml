@@ -1,0 +1,98 @@
+name: tests
+
+on:
+  push:
+    branches: [initial]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BLENDER_VERSION: "5.2.2"
+  BLENDER_SERIES: "5.2"
+  # blender-5.2.2-linux-x64.tar.xz as listed in https://download.blender.org/release/Blender5.2/blender-5.2.2.sha256
+  BLENDER_SHA256: 84098912789dc450e95697c4184fb8a90acbe5111c2ba4aede3fecb57806a168
+  GLTFPACK_VERSION: "1.2.0"
+  GLTFPACK_INTEGRITY: sha512-Wb65Jqc/8yWXeugZvwQO5PWL5oVI0o0TEM7/lu66mMc3HJ7QSuQ/YJyRphUyQNRFzzHZbnrKtdq1/GcWuUbFEA==
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # What Blender's own binary links against; the runner has no GPU and needs no more than this
+      - name: Install Blender's system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libgl1 libice6 libsm6 libx11-6 libxext6 libxfixes3 libxi6 libxkbcommon0 libxrender1
+
+      - name: Restore Blender
+        id: blender
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.local/opt/blender-${{ env.BLENDER_VERSION }}-linux-x64
+          key: blender-${{ env.BLENDER_VERSION }}-linux-x64-${{ env.BLENDER_SHA256 }}
+
+      # The checksum is pinned above and also compared with the one Blender publishes, so a changed download fails
+      # the build instead of being cached.
+      - name: Download Blender
+        if: steps.blender.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          name="blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          base="https://download.blender.org/release/Blender${BLENDER_SERIES}"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/blender.sha256" "$base/blender-${BLENDER_VERSION}.sha256"
+          published="$(awk -v n="$name" '$2 == n { print $1 }' "$RUNNER_TEMP/blender.sha256")"
+          if [ "$published" != "$BLENDER_SHA256" ]; then
+            echo "Blender publishes $published for $name; this workflow pins $BLENDER_SHA256" >&2
+            exit 1
+          fi
+          curl --fail --silent --show-error --location --retry 3 --output "$RUNNER_TEMP/$name" "$base/$name"
+          echo "$published  $RUNNER_TEMP/$name" | sha256sum --check -
+          mkdir -p ~/.local/opt
+          tar --extract --xz --file "$RUNNER_TEMP/$name" --directory ~/.local/opt
+
+      # --ignore-scripts: nothing from the package runs until its hash has been checked
+      - name: Install gltfpack
+        run: |
+          set -euo pipefail
+          node --version
+          npm install --no-save --ignore-scripts "gltfpack@${GLTFPACK_VERSION}"
+          node -e '
+            const got = require("./node_modules/.package-lock.json").packages["node_modules/gltfpack"].integrity;
+            if (got !== process.env.GLTFPACK_INTEGRITY) {
+              console.error("gltfpack integrity is " + got);
+              process.exit(1);
+            }
+          '
+
+      - name: Install blendpipe
+        run: python -m pip install .
+
+      - name: Doctor
+        run: blendpipe doctor .
+
+      - name: Tests inside Blender
+        run: |
+          ~/.local/opt/blender-${BLENDER_VERSION}-linux-x64/blender \
+            --background --factory-startup --python-exit-code 1 --python tools/run_tests.py
+
+      # Finds Blender in ~/.local/opt by itself, and builds the starter twice for the same-bytes test
+      - name: Command line tests
+        run: python -m unittest discover -s tests -t . -v
