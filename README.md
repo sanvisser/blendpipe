@@ -198,6 +198,7 @@ my-art/
 | `SPECS` | `{id: spec}` in one place instead of (or on top of) each module's `SPEC` |
 | `FINISHES` | named looks: `{"wood": dict(rough=0.75), "brass": dict(rough=0.3, metal=1.0), "lamp": dict(emit="#ffd9a0", strength=4)}` |
 | `TINTS` | `{role: "#rrggbb"}`: the tint roles materials may use, and the colours the sheets preview them in |
+| `TILE` | metres along one edge of a tile (default `1.0`), see [Building checks](#building-checks) |
 | `RIGS` | `{name: bone table}` beside the built-in `"humanoid"` |
 | `IMPORTS` | extra module names model modules may import |
 | `FPS` | frames per second of clips (default 30) |
@@ -220,6 +221,7 @@ Every key is optional.
 | `materials` | the most materials the model may use |
 | `sockets` | the socket kinds it must have, exactly |
 | `ground` | `(lo, hi)`: where a static model's lowest point must be (default `(-0.01, 0.01)`; `None` to skip) |
+| `footprint`, `overhang`, `height`, `fill`, `floating` | checks for a model on a tile: [Building checks](#building-checks) |
 | `join` | merge each group's parts into one mesh with several materials (fewer nodes, smaller files) |
 | `extras` | extra values on the root node, for the app |
 | `rig` | a rig name (`"humanoid"` or one of the project's `RIGS`); parts may then hang from bones |
@@ -283,6 +285,8 @@ On the built scene:
 - triangle budgets, the number of materials, and tint roles;
 - closed parts face outwards;
 - static models stand on the ground;
+- buildings, when the spec asks: footprint, height, fill and floating pieces (see
+  [Building checks](#building-checks));
 - sockets are exactly as the spec says;
 - skinned variants: 1 to 4 weights per vertex summing to 1, on bones the rig has, bound to the armature;
 - clips: they start at 0, loops end on their first pose, nothing sinks below the ground on any frame, and
@@ -295,6 +299,48 @@ On the written file:
   joints named for three.js (`upper_arm_L`), and embedded PNG textures.
 
 `--sheet` still renders when a check fails, so you can see what's wrong.
+
+## Building checks
+
+Five spec keys check the shape of a model that stands on a tile, such as a house, a farm or a wall. They are opt-in: a
+model without them is checked exactly as before.
+
+| Key | The rule |
+|---|---|
+| `footprint=(fx, fy)` | every vertex lies within plus or minus `f * TILE / 2 + overhang` of the origin, on x and on y |
+| `overhang` | metres a roof or an awning may reach past the footprint (default 0; needs `footprint`) |
+| `height` | the highest point is at most this many metres up |
+| `fill=(lo, hi)` | the plan's extent on each axis, as a share of the footprint (without the overhang), is `lo` to `hi` |
+| `floating` | metres: every piece touches the ground (z 0) or another piece's bounding box within this distance |
+
+`TILE` is a setting in `project.py`: the length of one tile's edge in metres, `1.0` unless you say otherwise. With the
+default, `footprint=(2, 2)` is a square of 2 m by 2 m centred on the origin.
+
+```python
+# project.py
+TILE = 2.0
+
+# models/house.py
+SPEC = dict(footprint=(1, 1), overhang=0.05, height=2.6, fill=(0.75, 0.95), floating=0.01)
+```
+
+Each failure names the rule and the amount:
+
+```
+farm: footprint: vertex at x = -1.015 is 0.015 past the tile edge (1.000)
+house: fill: the plan along x spans 1.460 m, 0.73 of the footprint (2.000 m); the range is 0.75 to 0.95 (1.500 to 1.900 m)
+tower: height: the highest point is at z = 2.700, 0.100 over the limit (2.600)
+shed: floating: a piece of part chimney around (0.300, 0.000, 1.325) is 0.150 m clear of the ground and of every other piece, at most 0.01 m allowed
+```
+
+- The footprint message names the worst vertex on each side that is over. Length rules are compared to within half a
+  millimetre, so rounding in the last digit never fails a build.
+- The checks measure the model as it stands in the scene, so a part that hangs from a bone counts where the rig puts it.
+- A piece is a set of faces that share vertices, so each primitive you add to a part is one piece, whether or not the
+  part is bevelled or joined. A piece inside another piece's bounding box counts as touching it, and two pieces that
+  touch each other but not the ground pass: the rule finds what hangs in the air, not every gap. The `ground` rule
+  still looks at the lowest point only.
+- Any key can come from `DEFAULTS` or `SPECS`. Set it to `None` in one model to turn it off there.
 
 ## What a glb looks like to the app
 
