@@ -17,6 +17,7 @@ from . import __version__, tools
 
 PACKAGE = os.path.dirname(os.path.abspath(__file__))
 STARTER = os.path.join(PACKAGE, "starter")
+OPEN = {"darwin": "open", "win32": "start"}.get(sys.platform, "xdg-open")      # shows a file in its app
 
 # Run inside Blender: loads exactly this package (nothing else from this Python's site-packages, whose compiled
 # modules may not suit Blender's Python), then the build.
@@ -144,13 +145,14 @@ def cmd_new(a):
     rel = os.path.relpath(dest)
     if rel.startswith(".."):
         rel = dest
+    show = f"{OPEN} out/sheets/walker.png"
     print(f"""made {rel}: project.py, models/ (crate, lantern, rock, walker), patterns.py, package.json
 
 next:
   cd {rel}
   npm install                                   # gltfpack {tools.GLTFPACK_VERSION}, pinned in package.json
   blendpipe build . out/assets --sheet out/sheets
-  open out/sheets/walker.png                    # look at every sheet after a change
+  {show:46}# look at every sheet after a change
 """)
     return 0
 

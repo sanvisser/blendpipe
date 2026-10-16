@@ -2,7 +2,9 @@
 
     python -m unittest discover -s tests -t .
 """
+import contextlib
 import hashlib
+import io
 import os
 import subprocess
 import sys
@@ -48,6 +50,12 @@ class New(unittest.TestCase):
                              ["crate.py", "lantern.py", "rock.py", "walker.py"])
             for d, dirs, _ in os.walk(dest):
                 self.assertNotIn("__pycache__", dirs)
+
+    def test_new_shows_sheets_with_the_platforms_opener(self):
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as out:
+            cli.main(["new", os.path.join(tmp, "art")])
+        self.assertIn(f"{cli.OPEN} out/sheets/walker.png", out.getvalue())
+        self.assertEqual(cli.OPEN, {"darwin": "open", "win32": "start"}.get(sys.platform, "xdg-open"))
 
     def test_new_refuses_a_folder_with_things_in_it(self):
         with tempfile.TemporaryDirectory() as tmp:
