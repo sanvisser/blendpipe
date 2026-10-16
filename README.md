@@ -80,6 +80,8 @@ work, since nothing is macOS-specific, but hasn't been tried yet.
 
 To update later, run `pipx upgrade blendpipe` (or `pip install --upgrade --force-reinstall git+https://...`).
 
+Building a project runs its Python, so read the [Trust model](#trust-model) before you build one you did not write.
+
 ## Linux
 
 blendpipe builds, checks and exports on Linux without a display or a GPU: Blender runs with `--background`.
@@ -347,6 +349,47 @@ blender --background --factory-startup --python-exit-code 1 \
 ```
 
 Keep `--python-exit-code 1`: without it Blender exits 0 when a script fails.
+
+## Trust model
+
+`blendpipe build` runs the project it builds. Its `project.py`, its helper modules and the modules in `models/` are
+Python, and they run inside Blender with the rights of the user who started the build: they can read and write your
+files and use the network. Treat a project the way you treat a `Makefile` or a `setup.py`, and build only projects you
+trust.
+
+- **The code rules are not a sandbox.** The check that reads each module in `models/` refuses imports, `bpy` and
+  unseeded randomness, which is what keeps rebuilds identical. It is a determinism and hygiene check, and code that
+  means to can get round it. At present it does not read `project.py` or the helper modules beside it at all.
+- **gltfpack runs too.** It is looked up in `$GLTFPACK`, then in a `node_modules` folder in the project folder or any
+  folder above it, then on the `PATH`, so whatever is in those places is run as part of the build.
+- **Blender starts with `--factory-startup`.** That ignores your own preferences and uses the defaults, where "Auto Run
+  Python Scripts" is off (checked on Blender 5.2.2), so scripts embedded in a `.blend` file do not run. blendpipe builds
+  from code and opens no `.blend` files.
+
+To build something you do not trust, build it where it can do no harm: in a container or a virtual machine, or on
+Linux in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox that has no network and can write only to the
+project and output folders. For example, from the folder that holds `art` (the project) and `out` (the output), with
+Blender unpacked in `~/.local/opt` and a clone of blendpipe in `~/src/blendpipe`:
+
+```sh
+bwrap --unshare-all --die-with-parent \
+  --ro-bind /usr /usr --symlink usr/lib /lib --symlink usr/lib64 /lib64 --symlink usr/bin /bin \
+  --ro-bind /etc/ld.so.cache /etc/ld.so.cache --proc /proc --dev /dev --tmpfs /tmp --setenv HOME /tmp \
+  --ro-bind ~/.local/opt/blender-5.2.2 /blender --ro-bind ~/src/blendpipe /blendpipe \
+  --bind "$PWD/art" /project --bind "$PWD/out" /out \
+  /blender/blender --background --factory-startup --python-exit-code 1 \
+    --python /blendpipe/tools/blender_build.py -- /project /out/assets --no-pack
+```
+
+This is a suggestion, not something blendpipe tests in CI: the paths are those of Debian and Ubuntu, so adjust them to
+your system, and bubblewrap needs unprivileged user namespaces, which some systems restrict. `--unshare-all` gives the
+build an empty network of its own, and everything but `/project`, `/out` and a scratch `/tmp` is read-only or absent.
+`--no-pack` keeps gltfpack and Node out of the sandbox, but the glbs are then uncompressed and may break a model's `kb`
+limit; to compress as usual, also bind a native gltfpack binary into the sandbox and point `GLTFPACK` at it with
+`--setenv`. Review sheets (`--sheet`) are left out because Blender needs more of the machine to render them.
+
+**To report a security problem,** please do not open a public issue. Open a private security advisory instead: on the
+repository's page, choose Security, then "Report a vulnerability".
 
 ## Things worth knowing
 
