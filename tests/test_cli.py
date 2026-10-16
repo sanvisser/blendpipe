@@ -96,6 +96,22 @@ def fake_blender(path, version):
 
 
 @unittest.skipIf(sys.platform == "win32", "the stand-in Blenders are shell scripts")
+class Crash(unittest.TestCase):
+    def test_a_crash_of_blender_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            crasher = os.path.join(tmp, "blender")
+            with open(crasher, "w") as f:
+                f.write("#!/bin/sh\nkill -SEGV $$\n")
+            os.chmod(crasher, 0o755)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = cli.main(["build", STARTER, os.path.join(tmp, "out"), "--blender", crasher])
+            self.assertLess(code, 0)
+            self.assertIn("Blender crashed (SIGSEGV)", err.getvalue())
+            self.assertIn("--renderer cycles", err.getvalue())
+
+
+@unittest.skipIf(sys.platform == "win32", "the stand-in Blenders are shell scripts")
 class FindBlender(unittest.TestCase):
     def find(self, home, path=""):
         env = {k: v for k, v in os.environ.items() if k != "BLENDER"}
@@ -273,11 +289,3 @@ class Renderer(unittest.TestCase):
             self.assertEqual(done.returncode, 0, text)
             self.assertIn("renderer: ", text)
             self.assertTrue(os.path.exists(os.path.join(tmp, "out", "props", "rock.webp")))
-
-    def test_a_crash_of_blender_is_reported(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            done, text = self.thumbs(tmp, "--renderer", "eevee", env=OLD_GL)
-            if done.returncode == 0:
-                self.skipTest("this machine's OpenGL ignores Mesa's version override")
-            self.assertIn("Blender crashed", text)
-            self.assertIn("--renderer cycles", text)
