@@ -9,6 +9,7 @@ import sys
 GLTFPACK_VERSION = "1.2.0"          # the version blendpipe is tested with (npm i -D gltfpack@1.2.0)
 MIN_BLENDER = (5, 0, 0)
 TESTED_BLENDER = (5, 2, 0)
+RENDERERS = ("auto", "eevee", "cycles")     # for the review sheets, see render.choose_renderer
 
 
 # Where Blender lives when it is not on the PATH (Linux: a distro package, snap, flatpak's wrapper, or the tarball

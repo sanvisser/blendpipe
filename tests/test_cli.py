@@ -21,8 +21,8 @@ BLENDER = tools.find_blender()
 GLTFPACK = tools.find_gltfpack(ROOT)
 
 
-def blendpipe(*args):
-    env = dict(os.environ, PYTHONPATH=os.path.join(ROOT, "src"))
+def blendpipe(*args, env=None):
+    env = dict(os.environ, PYTHONPATH=os.path.join(ROOT, "src"), **(env or {}))
     return subprocess.run([sys.executable, "-m", "blendpipe.cli", *args], capture_output=True, text=True, env=env,
                           cwd=ROOT, timeout=900)
 
@@ -186,3 +186,55 @@ class Builds(unittest.TestCase):
             self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
             self.assertIn("random.random", done.stdout + done.stderr)
             self.assertFalse(os.path.exists(os.path.join(tmp, "out")))
+
+
+# Mesa (the OpenGL most Linux machines have) can be told to offer only OpenGL 3.3, which is what a machine without
+# a GPU or with an old driver looks like to Blender: EEVEE needs 4.3, and Blender crashes outright without it.
+OLD_GL = {"MESA_GL_VERSION_OVERRIDE": "3.3", "MESA_GLSL_VERSION_OVERRIDE": "330"}
+
+
+@unittest.skipUnless(BLENDER and GLTFPACK, "needs Blender and gltfpack")
+class Renderer(unittest.TestCase):
+    def thumbs(self, tmp, *args, env=None):
+        done = blendpipe("build", STARTER, os.path.join(tmp, "out"), "--only", "rock", "--thumbs", *args,
+                         env={"TMPDIR": tmp, **(env or {})})
+        return done, done.stdout + done.stderr
+
+    def test_the_flag_picks_the_engine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            done, text = self.thumbs(tmp, "--renderer", "cycles")
+            self.assertEqual(done.returncode, 0, text)
+            self.assertIn("renderer: cycles (asked for)", text)
+            self.assertTrue(os.path.exists(os.path.join(tmp, "out", "props", "rock.webp")))
+
+    def test_the_environment_picks_the_engine_and_the_flag_wins(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            done, text = self.thumbs(tmp, env={"BLENDPIPE_RENDERER": "cycles"})
+            self.assertEqual(done.returncode, 0, text)
+            self.assertIn("renderer: cycles (asked for)", text)
+            done, text = self.thumbs(tmp, "--renderer", "auto", env={"BLENDPIPE_RENDERER": "luxrender"})
+            self.assertEqual(done.returncode, 0, text)
+            self.assertNotIn("asked for", text)
+
+    def test_an_unknown_engine_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            done, text = self.thumbs(tmp, "--renderer", "luxrender")
+            self.assertEqual(done.returncode, 2, text)
+            done, text = self.thumbs(tmp, env={"BLENDPIPE_RENDERER": "luxrender"})
+            self.assertEqual(done.returncode, 1, text)
+            self.assertIn("one of auto, eevee, cycles", text)
+
+    def test_without_opengl_4_3_the_sheets_fall_back_to_the_cpu(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            done, text = self.thumbs(tmp, env=OLD_GL)
+            self.assertEqual(done.returncode, 0, text)
+            self.assertIn("renderer: ", text)
+            self.assertTrue(os.path.exists(os.path.join(tmp, "out", "props", "rock.webp")))
+
+    def test_a_crash_of_blender_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            done, text = self.thumbs(tmp, "--renderer", "eevee", env=OLD_GL)
+            if done.returncode == 0:
+                self.skipTest("this machine's OpenGL ignores Mesa's version override")
+            self.assertIn("Blender crashed", text)
+            self.assertIn("--renderer cycles", text)

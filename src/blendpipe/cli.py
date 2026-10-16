@@ -3,12 +3,13 @@
     blendpipe new <dir>                    a new project from the starter (four models, settings, gltfpack pin)
     blendpipe doctor [<project dir>]       checks Blender, Node.js and gltfpack are there and new enough
     blendpipe build <project dir> <out dir> [--only id,id] [--sheet DIR] [--thumbs] [--no-pack]
-                    [--blender PATH] [--verbose]
+                    [--renderer auto|eevee|cycles] [--blender PATH] [--verbose]
 """
 import argparse
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -31,9 +32,11 @@ a = sys.argv[sys.argv.index("--") + 1:]
 run(a[0], a[1:])
 """
 
-# Blender's, the glTF exporter's and the renderer's own chatter, hidden unless --verbose
+# Blender's, the glTF exporter's and the renderer's own chatter (on Linux also Mesa's complaints that it found
+# no GPU device to open and Cycles' that it found no CUDA library, which both do without), hidden unless --verbose
 _NOISE = re.compile(r"\| INFO: |^INFO (Draco|MeshOptimizer) is available|render +\| Saved: |^Fra:|^Blender quit$"
-                    r"|^Read prefs:|^Blender \d+\.\d+|^\s*$|^\s+Time: ")
+                    r"|^Read prefs:|^Blender \d+\.\d+|^\s*$|^\s+Time: "
+                    r"|^libEGL warning: |^EGL Error \(0x3009\): EGL_BAD_MATCH|cycles +\| WARNING CUEW")
 
 
 def _fmt(v):
@@ -66,17 +69,24 @@ def cmd_build(a):
         opts.append("--thumbs")
     if a.no_pack:
         opts.append("--no-pack")
+    if a.renderer:
+        opts += ["--renderer", a.renderer]
     boot = _BOOT.format(pkg=PACKAGE, init=os.sep + "__init__.py")
     cmd = [blender, "--background", "--factory-startup", "--python-exit-code", "1", "--python-expr", boot, "--",
            project, os.path.abspath(a.out), *opts]
     if a.verbose:
-        return subprocess.run(cmd).returncode
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    for line in proc.stdout:
-        if not _NOISE.search(line):
-            sys.stdout.write(line)
-            sys.stdout.flush()
-    return proc.wait()
+        code = subprocess.run(cmd).returncode
+    else:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in proc.stdout:
+            if not _NOISE.search(line):
+                sys.stdout.write(line)
+                sys.stdout.flush()
+        code = proc.wait()
+    if code < 0:        # killed by a signal: Blender itself crashed, and said nothing
+        print(f"\nblendpipe: Blender crashed ({signal.Signals(-code).name}). If it was rendering the sheets, "
+              "--renderer cycles renders on the CPU instead.\n", file=sys.stderr)
+    return code
 
 
 def cmd_doctor(a):
@@ -158,6 +168,8 @@ def main(argv=None):
     b.add_argument("--sheet", metavar="DIR", help="render review sheets into DIR (also when a check fails)")
     b.add_argument("--thumbs", action="store_true", help="also write <id>.webp thumbnails beside the glbs")
     b.add_argument("--no-pack", action="store_true", help="write Blender's export uncompressed (no gltfpack)")
+    b.add_argument("--renderer", choices=tools.RENDERERS, help="what renders the sheets: eevee, cycles (on the CPU) "
+                   "or auto, which is eevee where Blender gets a real GPU (default: $BLENDPIPE_RENDERER, else auto)")
     b.add_argument("--blender", help="the Blender executable (default: $BLENDER, PATH, usual places)")
     b.add_argument("--verbose", action="store_true", help="show all of Blender's output")
     b.set_defaults(fn=cmd_build)
