@@ -1,4 +1,5 @@
-"""Review renders (EEVEE, headless): a sheet per model, a lineup of every model at one scale, and thumbnails.
+"""Review renders (EEVEE, headless; Cycles on the CPU where Blender gets no GPU, see choose_renderer): a sheet per
+model, a lineup of every model at one scale, and thumbnails.
 
 A model's sheet (<dir>/<id>.png) shows, top to bottom: a title with its triangles; a 3/4 view of every variant
 beside a 2 m ruler and its back; each of its groups on its own; six frames of every clip from the side-front. The
@@ -11,6 +12,8 @@ the files.
 """
 import math
 import os
+import re
+import subprocess
 
 import bpy
 import numpy as np
@@ -18,7 +21,9 @@ from mathutils import Euler, Matrix, Vector
 
 from . import anim, materials
 from .colour import srgb
+from .errors import BuildError
 from .scene import descendants, triangles
+from .tools import RENDERERS
 
 BACKGROUND = "#2b2f36"
 GROUND = "#6d7a4c"
@@ -26,11 +31,69 @@ SKY = "#b9c7d8"
 LABEL = "#e9e4d6"
 GAP = 6
 
+ENGINES = {"eevee": "BLENDER_EEVEE", "cycles": "CYCLES"}
+SOFTWARE_GL = re.compile(r"llvmpipe|softpipe|swrast|lavapipe|software", re.I)    # Mesa's CPU rasterisers
+CYCLES_SAMPLES = 0.25           # Cycles samples per EEVEE sample: its denoiser makes up the rest
 
-def _setup():
+# Run in a second Blender (see probe_gpu)
+_PROBE = """\
+import gpu
+if hasattr(gpu, "init"):
+    gpu.init()
+    print("gpu:", gpu.platform.backend_type_get(), "|", gpu.platform.renderer_get())
+else:
+    print("gpu: unknown")
+"""
+
+
+def probe_gpu():
+    """The GPU Blender gets in the background ("OPENGL | llvmpipe (LLVM 20.1.2, 256 bits)"), "unknown" if this
+    Blender cannot be asked (gpu.init is newer than 5.0), or None when it gets none. A second Blender is asked:
+    gpu.init() crashes Blender itself, which no try/except catches, when there is no OpenGL 4.3 (none installed,
+    or a Mesa that is too old)."""
+    cmd = [bpy.app.binary_path, "--background", "--factory-startup", "--disable-crash-handler", "--python-expr",
+           _PROBE]
+    try:
+        done = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r"^gpu: (.+)$", done.stdout, re.M)
+    return m.group(1) if m and done.returncode == 0 else None
+
+
+def choose_renderer(want="auto"):
+    """"eevee" or "cycles": the engine the renders use, after saying which and why. auto: EEVEE where Blender gets
+    a GPU, Cycles on the CPU where it does not (EEVEE needs OpenGL 4.3, Metal or Vulkan) or only gets Mesa's CPU
+    rasteriser (EEVEE runs on that, but slower than Cycles). want "eevee" or "cycles" skips the question."""
+    if want not in RENDERERS:
+        raise BuildError(f"the renderer is one of {', '.join(RENDERERS)}, not {want}")
+    if want != "auto":
+        print(f"renderer: {want} (asked for)")
+        return want
+    gpu = probe_gpu()
+    if gpu is None:
+        print("renderer: cycles on the CPU (Blender gets no GPU context here, and EEVEE needs one; "
+              "--renderer eevee tries it anyway)")
+        return "cycles"
+    if SOFTWARE_GL.search(gpu):
+        print(f"renderer: cycles on the CPU (Blender only gets {gpu}, which runs EEVEE slowly; "
+              "--renderer eevee uses it anyway)")
+        return "cycles"
+    print("renderer: eevee" + ("" if gpu == "unknown" else f" on {gpu}"))
+    return "eevee"
+
+
+def _setup(engine="eevee"):
     scene = bpy.context.scene
-    scene.render.engine = "BLENDER_EEVEE"
+    scene.render.engine = ENGINES[engine]
     scene.eevee.taa_render_samples = 24
+    if engine == "cycles":
+        cycles = scene.cycles
+        cycles.device = "CPU"
+        cycles.use_denoising = True
+        cycles.denoiser = "OPENIMAGEDENOISE"
+        cycles.max_bounces = 2          # as bright as 12 to the eye, and EEVEE has no more than a bounce either
+        cycles.seed = 0
     scene.render.film_transparent = True
     scene.view_settings.view_transform = "AgX"
     scene.render.resolution_percentage = 100
@@ -179,7 +242,10 @@ def frame(cam, pts, w, h, margin=1.1):
 def render(path, w, h, samples=24, fmt="PNG", quality=85):
     scene = bpy.context.scene
     scene.render.resolution_x, scene.render.resolution_y = w, h
-    scene.eevee.taa_render_samples = samples
+    if scene.render.engine == ENGINES["cycles"]:
+        scene.cycles.samples = max(2, round(samples * CYCLES_SAMPLES))
+    else:
+        scene.eevee.taa_render_samples = samples
     scene.render.image_settings.file_format = fmt
     scene.render.image_settings.color_mode = "RGBA"
     if fmt == "WEBP":
@@ -280,10 +346,17 @@ def ruler(at=(0, 0, 0), height=2.0):
 class Stage:
     """Everything the renders share: the light, the ground, the camera, labels, and the tints."""
 
-    def __init__(self, tints=None):
-        self.sun, self.ground, self.cam = _setup()
+    def __init__(self, tints=None, renderer="auto"):
+        self.renderer = choose_renderer(renderer)
+        self.sun, self.ground, self.cam = _setup(self.renderer)
         self.labels = Labels()
         self.tints = tints or {}
+        if self.renderer == "cycles":
+            for o in bpy.context.scene.objects:
+                if o.type == "LIGHT" and o.data.type == "POINT":
+                    # EEVEE's shadows come from the light's centre (a flame blocks the light inside it); Cycles' from
+                    # all of its radius, which would light the glass round the flame
+                    o.data.shadow_soft_size = 0.0
         for o in bpy.context.scene.objects:
             if o.type == "MESH" and o.data.color_attributes:
                 for mat in o.data.materials:
@@ -403,20 +476,20 @@ def lineup(st, models, out_dir, tiles):
     return compose(rows, os.path.join(out_dir, "lineup.png"))
 
 
-def sheets(out_dir, models, tints=None, stage=None):
+def sheets(out_dir, models, tints=None, stage=None, renderer="auto"):
     """Renders a sheet per model and the lineup into out_dir (tiles in out_dir/tiles); returns the paths."""
     os.makedirs(out_dir, exist_ok=True)
     tiles = os.path.join(out_dir, "tiles")
     os.makedirs(tiles, exist_ok=True)
-    st = stage or Stage(tints)
+    st = stage or Stage(tints, renderer)
     paths = [model_sheet(st, m, out_dir, tiles) for m in models]
     paths.append(lineup(st, models, out_dir, tiles))
     return paths
 
 
-def thumbnails(models, paths, size=256, tints=None, stage=None):
+def thumbnails(models, paths, size=256, tints=None, stage=None, renderer="auto"):
     """A transparent 3/4 view of each model (its first variant, at rest) written to paths[i] as webp."""
-    st = stage or Stage(tints)
+    st = stage or Stage(tints, renderer)
     for m, path in zip(models, paths):
         _pose(m)
         objs = _variant_tree(m)

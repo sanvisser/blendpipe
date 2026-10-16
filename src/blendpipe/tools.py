@@ -9,23 +9,57 @@ import sys
 GLTFPACK_VERSION = "1.2.0"          # the version blendpipe is tested with (npm i -D gltfpack@1.2.0)
 MIN_BLENDER = (5, 0, 0)
 TESTED_BLENDER = (5, 2, 0)
+RENDERERS = ("auto", "eevee", "cycles")     # for the review sheets, see render.choose_renderer
+
+
+# Where Blender lives when it is not on the PATH (Linux: a distro package, snap, flatpak's wrapper, or the tarball
+# from blender.org unpacked in the home folder or /opt; macOS and Windows: the installers' folders).
+SYSTEM_BLENDERS = ("/usr/bin/blender", "/usr/local/bin/blender", "/snap/bin/blender",
+                   "/var/lib/flatpak/exports/bin/org.blender.Blender",
+                   "/Applications/Blender.app/Contents/MacOS/Blender")
+UNPACKED_BLENDERS = ("~/.local/opt/blender-*/blender", "~/blender-*/blender", "/opt/blender*/blender",
+                     "~/.local/share/flatpak/exports/bin/org.blender.Blender",
+                     "~/Applications/Blender.app/Contents/MacOS/Blender",
+                     r"C:\Program Files\Blender Foundation\Blender *\blender.exe")
+
+
+def _runnable(path):
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def blender_places():
+    """The Blender executables found in the usual places, each once (symlinks to one file count once)."""
+    paths = list(SYSTEM_BLENDERS)
+    for pattern in UNPACKED_BLENDERS:
+        paths += glob.glob(os.path.expanduser(pattern))
+    seen, out = set(), []
+    for p in paths:
+        real = os.path.realpath(p)
+        if real not in seen and _runnable(p):
+            seen.add(real)
+            out.append(p)
+    return out
 
 
 def find_blender(explicit=None):
-    """The Blender executable: explicit, $BLENDER, blender on the PATH, or the usual install places."""
+    """The Blender executable: explicit, $BLENDER, blender on the PATH, or the usual install places. A blender on
+    the PATH that is new enough wins. Otherwise the newest of the usual places that is new enough; failing that
+    the first one found, so that doctor can say what is wrong with it."""
     for c in (explicit, os.environ.get("BLENDER")):
         if c:
-            found = shutil.which(c) or (c if os.path.exists(c) else None)
+            found = shutil.which(c) or (c if os.path.isfile(c) else None)
             if not found:
                 raise FileNotFoundError(f"Blender is not at {c}")
             return found
-    found = shutil.which("blender")
-    if found:
-        return found
-    places = ["/Applications/Blender.app/Contents/MacOS/Blender",
-              os.path.expanduser("~/Applications/Blender.app/Contents/MacOS/Blender"), "/snap/bin/blender"]
-    places += sorted(glob.glob(r"C:\Program Files\Blender Foundation\Blender *\blender.exe"), reverse=True)
-    return next((p for p in places if os.path.exists(p)), None)
+    on_path = shutil.which("blender")
+    if on_path and (blender_version(on_path) or MIN_BLENDER) >= MIN_BLENDER:
+        return on_path
+    seen = {os.path.realpath(on_path)} if on_path else set()
+    versions = [(blender_version(p), p) for p in blender_places() if os.path.realpath(p) not in seen]
+    newest = max(((v, p) for v, p in versions if v), default=None)
+    if newest and newest[0] >= MIN_BLENDER:
+        return newest[1]
+    return on_path or (newest[1] if newest else next((p for _, p in versions), None))
 
 
 def blender_version(blender):
