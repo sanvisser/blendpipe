@@ -7,12 +7,21 @@ What a model's spec turns on (all optional; see the README for the full list):
   kb                most kilobytes its glb may weigh
   sockets           the socket kinds it must have, exactly
   ground            (lo, hi): where a static model's lowest point must lie (default (-0.01, 0.01); None: no check)
+  footprint         (fx, fy): every vertex lies within f * TILE / 2 + overhang of the origin on x and y (TILE is the
+                    project's tile size in metres, default 1.0), so a building stays on its tile
+  overhang          metres past the footprint a roof or an awning may reach (default 0)
+  height            the highest point of the model, in metres
+  fill              (lo, hi): the plan's extent on each axis as a share of the footprint
+  floating          metres: every piece of the model (each primitive added to a part) touches the ground, or the
+                    bounding box of another piece, within this
   clips             {name: {loop, speed?, contact?, sink?}}: the clips it must have; each starts at frame 0, a loop
                     ends on the pose it starts with, nothing sinks below -sink (default 0.03 m) on any frame, and
                     contact (True, or a share of frames) keeps something on the ground
 """
 import ast
 import os
+
+import bpy
 
 from . import anim, materials
 from .export import EMISSIVE_STRENGTH, EXTENSIONS, LIGHTS, joint_name, read_glb
@@ -21,6 +30,8 @@ from .scene import triangles
 DEFAULT_GROUND = (-0.01, 0.01)
 DEFAULT_SINK = 0.03
 DEFAULT_CONTACT = 0.03
+DEFAULT_TILE = 1.0
+MM = 0.0005             # lengths of the building checks are compared to within half a millimetre
 
 ALLOWED_IMPORTS = {"blendpipe", "math", "mathutils", "random"}
 FORBIDDEN_NAMES = {"bpy", "bmesh", "exec", "eval", "open", "compile", "__import__", "globals"}
@@ -129,8 +140,8 @@ def _shared_state(dotted):
 
 # ---------------------------------------------------------------- the built model
 
-def model(m, problems, tints=None):
-    """Every rule of the spec on the built model m (before export)."""
+def model(m, problems, tints=None, tile=DEFAULT_TILE):
+    """Every rule of the spec on the built model m (before export). tile: the project's tile size in metres."""
     spec, mid = m.spec, m.id
     skinned = hasattr(m, "geos")
     meshes = m.meshes()
@@ -177,6 +188,7 @@ def model(m, problems, tints=None):
             if not lo_hi[0] <= low <= lo_hi[1]:
                 problems.add(f"{mid}: its lowest point is at {low:.3f} m; it must stand on the ground "
                              f"(between {lo_hi[0]} and {lo_hi[1]})")
+    building(m, problems, tile)
 
 
 def closed_volume(o):
@@ -276,6 +288,130 @@ def _lowest_now(m):
         mw = o.matrix_world
         low = min(low, min((mw @ v.co).z for v in o.data.vertices))
     return low
+
+
+# ---------------------------------------------------------------- buildings (all opt-in)
+
+def building(m, problems, tile=DEFAULT_TILE):
+    """The rules for a model that stands on a tile: footprint (with overhang), height, fill and floating. A spec
+    without those keys is not looked at. Lengths are metres, in world space, compared to within MM."""
+    spec, mid = m.spec, m.id
+    if all(spec.get(k) is None for k in ("footprint", "overhang", "height", "fill", "floating")):
+        return
+    foot = _pair(mid, spec, "footprint", problems, lambda a, b: a > 0 and b > 0, "two numbers above 0, (fx, fy)")
+    fill = _pair(mid, spec, "fill", problems, lambda lo, hi: 0 <= lo <= hi, "two numbers, (lo, hi) with 0 <= lo <= hi")
+    overhang = _metres(mid, spec, "overhang", problems)
+    height = _metres(mid, spec, "height", problems)
+    tol = _metres(mid, spec, "floating", problems)
+    if spec.get("footprint") is None:
+        for key in ("overhang", "fill"):
+            if spec.get(key) is not None:
+                problems.add(f"{mid}: {key} is set without a footprint")
+    bpy.context.view_layer.update()         # so that a part hung from a bone is where the rig holds it now
+    worlds = [(o, [tuple(o.matrix_world @ v.co) for v in o.data.vertices]) for o in m.meshes()]
+    pts = [p for _, ps in worlds for p in ps]
+    if not pts:
+        return
+    if foot:
+        _footprint(mid, pts, foot, overhang or 0.0, tile, problems)
+        if fill:
+            _fill(mid, pts, foot, fill, tile, problems)
+    top = max(p[2] for p in pts)
+    if height is not None and top > height + MM:
+        problems.add(f"{mid}: height: the highest point is at z = {top:.3f}, {top - height:.3f} over the limit "
+                     f"({height:.3f})")
+    if tol is not None:
+        _floating(mid, worlds, tol, problems)
+    # grow="tier" needs model params, which come in a later change; it goes here.
+
+
+def _pair(mid, spec, key, problems, ok, rule):
+    """spec[key] as two floats, or None when it is not set or not what it should be (which is a problem)."""
+    value = spec.get(key)
+    if value is None:
+        return None
+    try:
+        a, b = (float(v) for v in value)
+    except (TypeError, ValueError):
+        a = b = None
+    if a is None or not ok(a, b):
+        problems.add(f"{mid}: {key} is {value!r}; it must be {rule}")
+        return None
+    return a, b
+
+
+def _metres(mid, spec, key, problems):
+    """spec[key] as a float number of metres, or None when it is not set or not 0 or more (which is a problem)."""
+    value = spec.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        problems.add(f"{mid}: {key} is {value!r}; it must be a number of metres, 0 or more")
+        return None
+    return float(value)
+
+
+def _footprint(mid, pts, foot, overhang, tile, problems):
+    """Every vertex within f * tile / 2 + overhang of the origin on x and y: the worst one on each side is named."""
+    edge = "tile edge plus overhang" if overhang else "tile edge"
+    for axis, k in (("x", 0), ("y", 1)):
+        limit = foot[k] * tile / 2 + overhang
+        lo, hi = min(p[k] for p in pts), max(p[k] for p in pts)
+        for at, past in ((lo, -lo - limit), (hi, hi - limit)):
+            if past > MM:
+                problems.add(f"{mid}: footprint: vertex at {axis} = {at:.3f} is {past:.3f} past the {edge} "
+                             f"({limit:.3f})")
+
+
+def _fill(mid, pts, foot, fill, tile, problems):
+    """The plan's extent on each axis, as a share of the footprint (without any overhang), within the range."""
+    for axis, k in (("x", 0), ("y", 1)):
+        size = foot[k] * tile
+        extent = max(p[k] for p in pts) - min(p[k] for p in pts)
+        if not fill[0] * size - MM <= extent <= fill[1] * size + MM:
+            problems.add(f"{mid}: fill: the plan along {axis} spans {extent:.3f} m, {extent / size:.2f} of the "
+                         f"footprint ({size:.3f} m); the range is {fill[0]:g} to {fill[1]:g} "
+                         f"({fill[0] * size:.3f} to {fill[1] * size:.3f} m)")
+
+
+def _floating(mid, worlds, tol, problems):
+    """Every piece touches z 0 or the bounding box of another piece, within tol. A piece is a set of faces joined by
+    shared vertices: each primitive added to a part, whatever mesh the part ends up in."""
+    pieces = [(o.get("part"), lo, hi) for o, pts in worlds for lo, hi in _pieces(o, pts)]
+    for i, (part, lo, hi) in enumerate(pieces):
+        near = max(lo[2], -hi[2], 0.0)      # the distance to the ground
+        for j, (_, lo2, hi2) in enumerate(pieces):
+            if near <= tol + MM:
+                break
+            if j != i:
+                near = min(near, max(max(c - b, a - d, 0.0) for a, b, c, d in zip(lo, hi, lo2, hi2)))
+        if near > tol + MM:
+            at = ", ".join(f"{(a + b) / 2:.3f}" for a, b in zip(lo, hi))
+            problems.add(f"{mid}: floating: a piece of part {part} around ({at}) is {near:.3f} m clear of the ground "
+                         f"and of every other piece, at most {tol:g} m allowed")
+
+
+def _pieces(o, pts):
+    """The pieces of mesh o (its vertices at pts, in world space) as boxes (lo, hi)."""
+    root = list(range(len(pts)))
+
+    def find(i):
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+
+    for poly in o.data.polygons:
+        first = find(poly.vertices[0])
+        for v in poly.vertices[1:]:
+            root[find(v)] = first
+    boxes = {}
+    for i in sorted({v for poly in o.data.polygons for v in poly.vertices}):
+        lo, hi = boxes.setdefault(find(i), (list(pts[i]), list(pts[i])))
+        for k in range(3):
+            lo[k] = min(lo[k], pts[i][k])
+            hi[k] = max(hi[k], pts[i][k])
+    return list(boxes.values())
 
 
 # ---------------------------------------------------------------- the files
