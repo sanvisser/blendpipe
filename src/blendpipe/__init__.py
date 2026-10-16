@@ -11,7 +11,7 @@ Inside Blender:
 
 Outside Blender only the command line (`blendpipe build ...`, see blendpipe.cli) is available.
 """
-__version__ = "0.1.0"
+__version__ = "0.2.0a1"
 
 from .errors import BuildError
 
