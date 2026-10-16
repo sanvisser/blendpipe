@@ -30,15 +30,16 @@ three.js or any glTF engine) and renders review sheets you can look at.
 
 On macOS with Homebrew: `brew install --cask blender && brew install node pipx`.
 On Windows, use the installers from blender.org, nodejs.org and python.org.
+On Linux, see [Linux](#linux).
 
-Tested on macOS (Apple silicon) with Blender 5.2.2, Node 24 and Python 3.14. Linux and Windows should work, since
-nothing is macOS-specific, but they haven't been tried yet.
+Tested on macOS (Apple silicon) with Blender 5.2.2, Node 24 and Python 3.14, and on Linux (see below). Windows should
+work, since nothing is macOS-specific, but hasn't been tried yet.
 
 ## Install
 
 1. **Install Blender 5.2.** blendpipe finds it on your `PATH` as `blender`, in `/Applications/Blender.app` (macOS),
-   in `C:\Program Files\Blender Foundation\` (Windows) or at `/snap/bin/blender`. If yours is elsewhere, point
-   `BLENDER` at the executable:
+   in `C:\Program Files\Blender Foundation\` (Windows) or in the usual Linux places (see [Linux](#linux)). If yours
+   is elsewhere, point `BLENDER` at the executable:
 
    ```sh
    export BLENDER=/path/to/blender
@@ -71,13 +72,72 @@ nothing is macOS-specific, but they haven't been tried yet.
 
    ```sh
    blendpipe build . out/assets --sheet out/sheets
-   open out/sheets/walker.png        # Windows: start out\sheets\walker.png
+   open out/sheets/walker.png        # Linux: xdg-open out/sheets/walker.png, Windows: start out\sheets\walker.png
    ```
 
    You get `out/assets/props/{crate,lantern,rock}.glb`, `out/assets/units/walker.glb` (and `walker-far.glb`), and a
    sheet per model plus `lineup.png` in `out/sheets`.
 
 To update later, run `pipx upgrade blendpipe` (or `pip install --upgrade --force-reinstall git+https://...`).
+
+## Linux
+
+blendpipe builds, checks and exports on Linux without a display or a GPU: Blender runs with `--background`.
+
+**Install Blender.** Take the Linux tarball from [blender.org](https://www.blender.org/download/) and unpack it where
+you like. blendpipe needs Blender 5.0 or newer, and some distributions package an older one (Ubuntu 24.04's is 4.0), so
+`blendpipe doctor` will say so if that is the one it finds. The tarball's `blender` binary links against a few system
+libraries even without a window (`libGL`, `libX11`, `libXi`, `libXrender`, `libXfixes`, `libxkbcommon`, `libSM`);
+on a minimal install, add them (on Debian and Ubuntu, for example: `sudo apt install libgl1 libxi6 libxrender1
+libxkbcommon0 libsm6 libxfixes3`).
+
+```sh
+mkdir -p ~/.local/opt && tar -xJf blender-5.2.2-linux-x64.tar.xz -C ~/.local/opt
+blendpipe doctor
+```
+
+**Where blendpipe looks for Blender,** in this order:
+
+1. `--blender PATH`, then `$BLENDER`: used as given, and an error if there is no such file.
+2. `blender` on the `PATH`, when it is Blender 5.0 or newer. An older one does not hide a newer one below.
+3. Otherwise the newest Blender 5.0 or newer found in `/usr/bin`, `/usr/local/bin`, `/snap/bin`, flatpak's
+   `org.blender.Blender` wrapper (`/var/lib/flatpak/exports/bin` and `~/.local/share/flatpak/exports/bin`),
+   `~/.local/opt/blender-*`, `~/blender-*` and `/opt/blender*`. Each is asked for its version.
+4. If only older ones exist, the first is returned, so that `doctor` can tell you its version.
+
+**Review sheets without a GPU.** EEVEE draws on a GPU through OpenGL 4.3 (Metal and Vulkan elsewhere). A headless
+Linux machine usually has none: Blender then gets Mesa's CPU rasteriser (`llvmpipe`), which runs EEVEE but slowly, or no
+usable OpenGL at all, where Blender crashes the moment it draws. So before it renders sheets or thumbnails blendpipe
+asks a second Blender what GPU it gets, and says what it chose:
+
+```
+renderer: eevee on <backend> | <the GPU's name>
+renderer: cycles on the CPU (Blender only gets OPENGL | llvmpipe (LLVM 20.1.2, 256 bits), which runs EEVEE slowly; --renderer eevee uses it anyway)
+renderer: cycles on the CPU (Blender gets no GPU context here, and EEVEE needs one; --renderer eevee tries it anyway)
+```
+
+`--renderer auto|eevee|cycles` (or `BLENDPIPE_RENDERER`; the flag wins) overrides the choice. `auto` is EEVEE on a real
+GPU and Cycles otherwise. The Cycles setup is the same scene, light and camera: path tracing on the CPU with the
+OpenImageDenoise denoiser, two bounces and a quarter of EEVEE's sample count. On the starter's walker (12 cores,
+llvmpipe) it took 57 s where EEVEE took 155 s, and the sheet differs from EEVEE's by 1% mean absolute pixel
+difference: the same model, colours and framing, about 1% darker on average. Workbench is no fallback: it needs the
+same OpenGL context as EEVEE. A build without `--sheet` or `--thumbs` never renders and needs none of this.
+
+**Known limits.**
+
+- Tested on Ubuntu 24.04 (x86-64) with the Blender 5.2.2 tarball, Node 24 and Python 3.12, on a machine without a
+  usable GPU. Not tried: other distributions, arm64, Blender 5.0 and 5.1, snap and flatpak (found by name and tested
+  with stand-ins, but never run; flatpak's sandbox may not see folders outside your home), and `--renderer eevee`
+  on a real GPU on Linux.
+- The question "what GPU does Blender get?" uses `gpu.init()`, which this Blender (5.2) has. If a Blender lacks it,
+  `auto` falls back to EEVEE as before.
+- `--renderer eevee` on a machine without OpenGL 4.3 crashes Blender, which blendpipe reports (`Blender crashed
+  (SIGSEGV)`) but cannot recover from.
+- The glbs are byte for byte the same on every Linux build tried: twice in one place, and again from another path
+  with a space in it, another working directory, another `TMPDIR`, another number of CPUs. They were not compared with
+  a macOS build, and floating point may well differ in the last bit between x86-64 and Apple silicon.
+- Mesa's "failed to open /dev/dri" warnings and Cycles' "CUEW" warning are hidden unless you use `--verbose`; they
+  only say there is no GPU device or driver library to open.
 
 ## A model
 
@@ -268,6 +328,7 @@ blendpipe build <project dir> <out dir>   build, check, export
     --sheet DIR       review sheets (also on failure)
     --thumbs          <id>.webp thumbnails beside the glbs
     --no-pack         Blender's export uncompressed, no gltfpack needed
+    --renderer R      auto, eevee or cycles for --sheet and --thumbs (default: $BLENDPIPE_RENDERER, else auto)
     --blender PATH    which Blender (default: $BLENDER, PATH, usual places)
     --verbose         all of Blender's output
 ```
@@ -313,6 +374,9 @@ npm install                                                     # gltfpack for t
 blender --background --factory-startup --python-exit-code 1 --python tools/run_tests.py    # inside Blender
 python3 -m unittest discover -s tests -t .                       # the CLI, and a full build twice: same bytes
 ```
+
+On Linux, GitHub Actions runs both on `ubuntu-latest` with a pinned, checksum-verified Blender
+(`.github/workflows/tests.yml`).
 
 ## License
 
