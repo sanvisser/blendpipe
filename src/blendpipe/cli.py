@@ -47,7 +47,8 @@ def _blender_or_exit(explicit):
         sys.exit(f"blendpipe: {e}")
     if not blender:
         sys.exit("blendpipe: Blender is not found: install Blender 5.2 (blender.org) or set BLENDER to its "
-                 "executable (on macOS /Applications/Blender.app/Contents/MacOS/Blender)")
+                 "executable (on macOS /Applications/Blender.app/Contents/MacOS/Blender, on Linux the blender file "
+                 "in the unpacked download)")
     return blender
 
 

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -53,6 +54,77 @@ class New(unittest.TestCase):
             open(os.path.join(tmp, "x"), "w").close()
             with self.assertRaises(SystemExit):
                 cli.main(["new", tmp])
+
+
+def fake_blender(path, version):
+    """An executable that says it is that Blender version (enough for find_blender)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(f"#!/bin/sh\necho 'Blender {version}'\n")
+    os.chmod(path, 0o755)
+    return path
+
+
+@unittest.skipIf(sys.platform == "win32", "the stand-in Blenders are shell scripts")
+class FindBlender(unittest.TestCase):
+    def find(self, home, path=""):
+        env = {k: v for k, v in os.environ.items() if k != "BLENDER"}
+        with mock.patch.dict(os.environ, {**env, "HOME": home, "PATH": path}, clear=True), \
+                mock.patch.object(tools, "SYSTEM_BLENDERS", ()):
+            return tools.find_blender()
+
+    def test_the_newest_unpacked_blender_wins(self):
+        with tempfile.TemporaryDirectory() as home:
+            fake_blender(os.path.join(home, ".local", "opt", "blender-5.0.1-linux-x64", "blender"), "5.0.1")
+            new = fake_blender(os.path.join(home, ".local", "opt", "blender-5.2.2-linux-x64", "blender"), "5.2.2")
+            fake_blender(os.path.join(home, "blender-4.5.3-linux-x64", "blender"), "4.5.3")
+            self.assertEqual(self.find(home), new)
+
+    def test_sorts_versions_as_numbers_not_text(self):
+        with tempfile.TemporaryDirectory() as home:
+            fake_blender(os.path.join(home, "blender-5.9.0", "blender"), "5.9.0")
+            new = fake_blender(os.path.join(home, "blender-5.10.0", "blender"), "5.10.0")
+            self.assertEqual(self.find(home), new)
+
+    def test_the_path_wins_when_it_is_new_enough(self):
+        with tempfile.TemporaryDirectory() as home:
+            fake_blender(os.path.join(home, "blender-5.2.2", "blender"), "5.2.2")
+            on_path = fake_blender(os.path.join(home, "bin", "blender"), "5.0.0")
+            self.assertEqual(self.find(home, os.path.dirname(on_path)), on_path)
+
+    def test_an_old_blender_on_the_path_does_not_hide_a_new_one(self):
+        with tempfile.TemporaryDirectory() as home:
+            new = fake_blender(os.path.join(home, "blender-5.2.2", "blender"), "5.2.2")
+            old = fake_blender(os.path.join(home, "bin", "blender"), "4.0.2")
+            self.assertEqual(self.find(home, os.path.dirname(old)), new)
+
+    def test_only_an_old_blender_is_still_found_so_doctor_can_say_so(self):
+        with tempfile.TemporaryDirectory() as home:
+            old = fake_blender(os.path.join(home, "blender-4.5.3", "blender"), "4.5.3")
+            self.assertEqual(self.find(home), old)
+
+    def test_flatpaks_wrapper_is_found(self):
+        with tempfile.TemporaryDirectory() as home:
+            wrapper = fake_blender(os.path.join(home, ".local", "share", "flatpak", "exports", "bin",
+                                                "org.blender.Blender"), "5.2.2")
+            self.assertEqual(self.find(home), wrapper)
+
+    def test_a_folder_that_is_not_executable_is_skipped(self):
+        with tempfile.TemporaryDirectory() as home:
+            os.makedirs(os.path.join(home, "blender-5.2.2", "blender"))      # a folder, not the program
+            self.assertIsNone(self.find(home))
+
+    def test_nothing_found(self):
+        with tempfile.TemporaryDirectory() as home:
+            self.assertIsNone(self.find(home))
+
+    def test_BLENDER_names_the_executable_file(self):
+        with tempfile.TemporaryDirectory() as home:
+            exe = fake_blender(os.path.join(home, "mine", "blender"), "5.2.2")
+            with mock.patch.dict(os.environ, {"BLENDER": exe}):
+                self.assertEqual(tools.find_blender(), exe)
+            with mock.patch.dict(os.environ, {"BLENDER": os.path.dirname(exe)}), self.assertRaises(FileNotFoundError):
+                tools.find_blender()
 
 
 class Gltfpack(unittest.TestCase):
