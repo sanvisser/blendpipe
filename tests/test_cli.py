@@ -228,6 +228,29 @@ class Builds(unittest.TestCase):
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertEqual(digests(first), digests(os.path.join(tmp, "out2")))
 
+    def test_a_building_is_held_to_the_projects_tile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            art = os.path.join(tmp, "art")
+            os.makedirs(os.path.join(art, "models"))
+            with open(os.path.join(art, "models", "hut.py"), "w") as f:
+                f.write(textwrap.dedent("""
+                    import blendpipe as bp
+                    from blendpipe import geo
+                    SPEC = dict(footprint=(1, 1), height=1.5, floating=0.01)
+                    def build(m):
+                        m.part("walls", bp.material("hut-m", "#888888")).add(
+                            geo.box_between((-0.9, -0.9, 0), (0.9, 0.9, 1)))
+                    """))
+            done = blendpipe("build", art, os.path.join(tmp, "out"), "--no-pack")        # the default tile is 1 m
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            self.assertIn("hut: footprint: vertex at x = -0.900 is 0.400 past the tile edge (0.500)",
+                          done.stdout + done.stderr)
+            with open(os.path.join(art, "project.py"), "w") as f:
+                f.write("TILE = 2.0\n")
+            done = blendpipe("build", art, os.path.join(tmp, "out"), "--no-pack")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertTrue(os.path.exists(os.path.join(tmp, "out", "hut.glb")))
+
     def test_a_broken_model_fails_the_build_and_says_why(self):
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, "art", "models"))
