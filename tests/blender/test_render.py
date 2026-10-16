@@ -10,12 +10,13 @@ from blendpipe import geo, render, scene
 from blendpipe.errors import BuildError
 
 
-def crate():
+def crate(light=False):
     scene.reset()
     m = bp.Model("box", {"tris": 100})
     m.part("body", bp.material("render-wood", "#8a6a4a")).add(geo.box((1, 1, 1), (0, 0, 0.5)))
+    lamp = m.light("lamp", (0, 0, 1.5), "#ffb347", 3.0) if light else None
     m.finish()
-    return m
+    return (m, lamp) if light else m
 
 
 class Choosing(unittest.TestCase):
@@ -49,6 +50,14 @@ class Cycles(unittest.TestCase):
         self.assertGreater(centre[0], centre[2])        # the wood is warm
         self.assertGreater(corner[1], corner[0])        # the ground is green
         self.assertEqual(bpy.context.scene.cycles.samples, round(16 * render.CYCLES_SAMPLES))
+
+    def test_a_point_light_shades_from_its_centre_as_it_does_in_eevee(self):
+        m, lamp = crate(light=True)
+        render.Stage(None, "eevee")
+        self.assertGreater(lamp.data.shadow_soft_size, 0)
+        m, lamp = crate(light=True)
+        render.Stage(None, "cycles")
+        self.assertEqual(lamp.data.shadow_soft_size, 0)
 
     def test_thumbnails_are_written(self):
         m = crate()

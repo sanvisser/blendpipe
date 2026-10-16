@@ -351,6 +351,12 @@ class Stage:
         self.sun, self.ground, self.cam = _setup(self.renderer)
         self.labels = Labels()
         self.tints = tints or {}
+        if self.renderer == "cycles":
+            for o in bpy.context.scene.objects:
+                if o.type == "LIGHT" and o.data.type == "POINT":
+                    # EEVEE's shadows come from the light's centre (a flame blocks the light inside it); Cycles' from
+                    # all of its radius, which would light the glass round the flame
+                    o.data.shadow_soft_size = 0.0
         for o in bpy.context.scene.objects:
             if o.type == "MESH" and o.data.color_attributes:
                 for mat in o.data.materials:
