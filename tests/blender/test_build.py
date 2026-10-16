@@ -1,12 +1,13 @@
 """Models, skinned models, clips, checks and export inside Blender."""
 import os
+import sys
 import tempfile
 import unittest
 
 import bpy
 
 import blendpipe as bp
-from blendpipe import anim, biped, checks, export, geo, rig, scene, tools
+from blendpipe import anim, biped, checks, export, geo, rig, runner, scene, tools
 from blendpipe.errors import BuildError
 from blendpipe.skin import Chain, swap_sides, top4
 
@@ -100,6 +101,29 @@ class Models(unittest.TestCase):
         m.finish()
         self.assertGreater(scene.triangles(m.meshes()), 12)
         self.assertGreater(checks.closed_volume(m.meshes()[0]), 0)
+
+
+class Settings(unittest.TestCase):
+    def project(self, project_py=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "models"))
+            if project_py is not None:
+                with open(os.path.join(tmp, "project.py"), "w") as f:
+                    f.write(project_py)
+            try:
+                return runner.Project(tmp)
+            finally:
+                sys.path.remove(tmp)
+
+    def test_a_tile_is_one_metre_unless_the_project_says_so(self):
+        self.assertEqual(self.project().tile, 1.0)
+        self.assertEqual(self.project("DEFAULTS = {}\n").tile, 1.0)
+        self.assertEqual(self.project("TILE = 2.5\n").tile, 2.5)
+
+    def test_a_tile_has_a_size(self):
+        for tile in ("0", "-1", "float('nan')"):
+            with self.subTest(tile), self.assertRaises(BuildError):
+                self.project(f"TILE = {tile}\n")
 
 
 class Skinning(unittest.TestCase):
