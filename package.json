@@ -1,0 +1,8 @@
+{
+  "name": "blendpipe-dev",
+  "private": true,
+  "description": "For running blendpipe's own tests: gltfpack, the version blendpipe is tested with.",
+  "devDependencies": {
+    "gltfpack": "1.2.0"
+  }
+}

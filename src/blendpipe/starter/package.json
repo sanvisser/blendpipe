@@ -1,0 +1,8 @@
+{
+  "name": "blendpipe-project",
+  "private": true,
+  "description": "gltfpack compresses the glbs blendpipe exports (meshopt, quantised attributes).",
+  "devDependencies": {
+    "gltfpack": "1.2.0"
+  }
+}

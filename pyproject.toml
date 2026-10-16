@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "blendpipe"
+version = "0.1.0"
+description = "Procedural, deterministic low-poly game assets built headless in Blender: checked against budgets, exported as compressed glb, rendered as review sheets."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["blender", "gltf", "glb", "procedural", "low-poly", "game-assets", "three.js"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+
+[project.scripts]
+blendpipe = "blendpipe.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+blendpipe = ["starter/*", "starter/models/*"]

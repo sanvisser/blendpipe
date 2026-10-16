@@ -1,0 +1,4 @@
+node_modules/
+__pycache__/
+# review sheets and test builds; commit the glbs you ship from wherever your app keeps them
+out/

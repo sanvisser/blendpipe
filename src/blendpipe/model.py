@@ -35,6 +35,7 @@ class BaseModel:
             self.root["rig"] = self.spec["rig"]
         if self.spec.get("clips"):
             self.root["clips"] = {name: dict(c) for name, c in self.spec["clips"].items()}
+        self.fps = bpy.context.scene.render.fps
         self.arm = None
         self.rig = None
         self.objects = [self.root]
@@ -47,7 +48,7 @@ class BaseModel:
     def group(self, name, **extras):
         """The group node called name (made on first use), under the root, with extras {group: name, **extras}."""
         if name not in self._groups:
-            g = empty(self._unique(f"{self.id}-{name}"), self.root)
+            g = empty(self._unique(f"{self.id}-group-{name}"), self.root)
             g["group"] = name
             for key, value in extras.items():
                 g[key] = value
@@ -155,8 +156,8 @@ class Model(BaseModel):
             if bevel:
                 g = bevelled(g, bevel, segments)
             key = (group, bone) if join else (name,)
-            node = joined.setdefault(key, {"name": name if not join else (group or "body") +
-                                           (f"-{bone}" if bone else ""),
+            joined_name = (group or "body") + (f"-{bone}" if bone else "")
+            node = joined.setdefault(key, {"name": joined_name if join else name,
                                            "group": group, "bone": bone, "verts": [], "faces": [], "mats": [],
                                            "sharp": [], "tints": set()})
             base = len(node["verts"])

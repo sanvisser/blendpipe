@@ -36,10 +36,28 @@ def face_uvs(verts, face, mat):
     return [NEUTRAL_UV] * len(pts)
 
 
+def normal_mapped(mat):
+    """Whether a material uses a normal map (its mesh then needs tangents)."""
+    return bool(mat.node_tree) and any(n.bl_idname == "ShaderNodeNormalMap" for n in mat.node_tree.nodes)
+
+
+def _fan(faces, face_mats, face_sharp):
+    """Faces of more than four corners split into fans (Blender computes tangents for triangles and quads only)."""
+    out_f, out_m, out_s = [], [], []
+    for f, m, s in zip(faces, face_mats, face_sharp):
+        pieces = [f] if len(f) <= 4 else [(f[0], f[i], f[i + 1]) for i in range(1, len(f) - 1)]
+        out_f += pieces
+        out_m += [m] * len(pieces)
+        out_s += [s] * len(pieces)
+    return out_f, out_m, out_s
+
+
 def build_mesh(name, verts, faces, face_mats, face_sharp, colours=None):
     """A mesh datablock: face_mats one material per face, face_sharp one smoothing angle (degrees) per face (an edge
     between two faces turned further apart than the smaller of their angles stays hard; 0 is flat shading),
     colours one linear RGB per vertex (a "Color" attribute, exported as COLOR_0) or None."""
+    if any(normal_mapped(m) for m in set(face_mats)):
+        faces, face_mats, face_sharp = _fan(faces, face_mats, face_sharp)
     me = bpy.data.meshes.new(name)
     me.from_pydata([tuple(v) for v in verts], [], [tuple(f) for f in faces])
     me.update()
