@@ -30,15 +30,16 @@ three.js or any glTF engine) and renders review sheets you can look at.
 
 On macOS with Homebrew: `brew install --cask blender && brew install node pipx`.
 On Windows, use the installers from blender.org, nodejs.org and python.org.
+On Linux, see [Linux](#linux).
 
-Tested on macOS (Apple silicon) with Blender 5.2.2, Node 24 and Python 3.14. Linux and Windows should work, since
-nothing is macOS-specific, but they haven't been tried yet.
+Tested on macOS (Apple silicon) with Blender 5.2.2, Node 24 and Python 3.14, and on Linux (see below). Windows should
+work, since nothing is macOS-specific, but hasn't been tried yet.
 
 ## Install
 
 1. **Install Blender 5.2.** blendpipe finds it on your `PATH` as `blender`, in `/Applications/Blender.app` (macOS),
-   in `C:\Program Files\Blender Foundation\` (Windows) or at `/snap/bin/blender`. If yours is elsewhere, point
-   `BLENDER` at the executable:
+   in `C:\Program Files\Blender Foundation\` (Windows) or in the usual Linux places (see [Linux](#linux)). If yours
+   is elsewhere, point `BLENDER` at the executable:
 
    ```sh
    export BLENDER=/path/to/blender
@@ -71,13 +72,73 @@ nothing is macOS-specific, but they haven't been tried yet.
 
    ```sh
    blendpipe build . out/assets --sheet out/sheets
-   open out/sheets/walker.png        # Windows: start out\sheets\walker.png
+   open out/sheets/walker.png        # Linux: xdg-open out/sheets/walker.png, Windows: start out\sheets\walker.png
    ```
 
    You get `out/assets/props/{crate,lantern,rock}.glb`, `out/assets/units/walker.glb` (and `walker-far.glb`), and a
    sheet per model plus `lineup.png` in `out/sheets`.
 
 To update later, run `pipx upgrade blendpipe` (or `pip install --upgrade --force-reinstall git+https://...`).
+
+## Linux
+
+blendpipe builds, checks and exports on Linux without a display or a GPU: Blender runs with `--background`.
+
+**Install Blender.** Take the Linux tarball from [blender.org](https://www.blender.org/download/) and unpack it where
+you like. blendpipe needs Blender 5.0 or newer, and some distributions package an older one (Ubuntu 24.04's is 4.0), so
+`blendpipe doctor` will say so if that is the one it finds. The tarball's `blender` binary links against a few system
+libraries even without a window (`libGL`, `libX11`, `libXi`, `libXrender`, `libXfixes`, `libxkbcommon`, `libSM`);
+on a minimal install, add them (on Debian and Ubuntu, for example: `sudo apt install libgl1 libxi6 libxrender1
+libxkbcommon0 libsm6 libxfixes3`).
+
+```sh
+mkdir -p ~/.local/opt && tar -xJf blender-5.2.2-linux-x64.tar.xz -C ~/.local/opt
+blendpipe doctor
+```
+
+**Where blendpipe looks for Blender,** in this order:
+
+1. `--blender PATH`, then `$BLENDER`: used as given, and an error if there is no such file.
+2. `blender` on the `PATH`, when it is Blender 5.0 or newer. An older one does not hide a newer one below.
+3. Otherwise the newest Blender 5.0 or newer found in `/usr/bin`, `/usr/local/bin`, `/snap/bin`, flatpak's
+   `org.blender.Blender` wrapper (`/var/lib/flatpak/exports/bin` and `~/.local/share/flatpak/exports/bin`),
+   `~/.local/opt/blender-*`, `~/blender-*` and `/opt/blender*`. Each is asked for its version.
+4. If only older ones exist, the first is returned, so that `doctor` can tell you its version.
+
+**Review sheets without a GPU.** EEVEE draws on a GPU through OpenGL 4.3 (Metal and Vulkan elsewhere). A headless
+Linux machine usually has none: Blender then gets Mesa's CPU rasteriser (`llvmpipe`), which runs EEVEE but slowly, or no
+usable OpenGL at all, where Blender crashes the moment it draws. So before it renders sheets or thumbnails blendpipe
+asks a second Blender what GPU it gets, and says what it chose:
+
+```
+renderer: eevee on <backend> | <the GPU's name>
+renderer: cycles on the CPU (Blender only gets OPENGL | llvmpipe (LLVM 20.1.2, 256 bits), which runs EEVEE slowly; --renderer eevee uses it anyway)
+renderer: cycles on the CPU (Blender gets no GPU context here, and EEVEE needs one; --renderer eevee tries it anyway)
+```
+
+`--renderer auto|eevee|cycles` (or `BLENDPIPE_RENDERER`; the flag wins) overrides the choice. `auto` is EEVEE on a real
+GPU and Cycles otherwise. The Cycles setup is the same scene, light and camera: path tracing on the CPU with the
+OpenImageDenoise denoiser, two bounces and a quarter of EEVEE's sample count, and point lights shade from their
+centre as in EEVEE. On the starter (12 cores, llvmpipe) the build with sheets took 88 to 127 s where EEVEE took 305 s.
+Its five sheets differ from the EEVEE ones by 0.7 to 1.5% mean absolute pixel difference: the same models, colours
+and framing, but creases and the gaps between planks come out darker (Cycles lets a model block the sky's light,
+and EEVEE's sheets here do not show that). Workbench is no fallback: it needs the same OpenGL context as EEVEE. A build without `--sheet` or `--thumbs` never renders and needs none of this.
+
+**Known limits.**
+
+- Tested on Ubuntu 24.04 (x86-64) with the Blender 5.2.2 tarball, Node 24 and Python 3.12, on a machine without a
+  usable GPU. Not tried: other distributions, arm64, Blender 5.0 and 5.1, snap and flatpak (found by name and tested
+  with stand-ins, but never run; flatpak's sandbox may not see folders outside your home), and `--renderer eevee`
+  on a real GPU on Linux.
+- The question "what GPU does Blender get?" uses `gpu.init()`, which this Blender (5.2) has. If a Blender lacks it,
+  `auto` falls back to EEVEE as before.
+- `--renderer eevee` on a machine without OpenGL 4.3 crashes Blender, which blendpipe reports (`Blender crashed
+  (SIGSEGV)`) but cannot recover from.
+- The glbs are byte for byte the same on every Linux build tried: twice in one place, and again from another path
+  with a space in it, another working directory, another `TMPDIR`, another number of CPUs. They were not compared with
+  a macOS build, and floating point may well differ in the last bit between x86-64 and Apple silicon.
+- Mesa's "failed to open /dev/dri" warnings and Cycles' "CUEW" warning are hidden unless you use `--verbose`; they
+  only say there is no GPU device or driver library to open.
 
 ## A model
 
@@ -113,8 +174,11 @@ Faces run counter-clockwise seen from outside. Every primitive in `geo` does thi
 
 A model module may import only `blendpipe`, `math`, `mathutils`, `random` and the helper modules beside
 `project.py`. It never imports `bpy`, and it uses randomness only as `random.Random(<number>)`. The build checks this
-by reading the code, because it is what keeps rebuilds identical. Code that needs more, such as numpy textures, goes in
-a helper module (see `patterns.py` in the starter).
+by reading the code, because it is what keeps rebuilds identical. For the same reason it refuses
+`mathutils.noise.seed_set` and the `noise.random*` functions, which share one random state for the whole session. The
+rest of `mathutils.noise` (`noise.noise`, `noise.turbulence`, `noise.cell` and so on) gives the same answer for the
+same input and is fine. Code that needs more, such as numpy textures, goes in a helper module (see `patterns.py` in
+the starter).
 
 ## A project
 
@@ -134,6 +198,7 @@ my-art/
 | `SPECS` | `{id: spec}` in one place instead of (or on top of) each module's `SPEC` |
 | `FINISHES` | named looks: `{"wood": dict(rough=0.75), "brass": dict(rough=0.3, metal=1.0), "lamp": dict(emit="#ffd9a0", strength=4)}` |
 | `TINTS` | `{role: "#rrggbb"}`: the tint roles materials may use, and the colours the sheets preview them in |
+| `TILE` | metres along one edge of a tile (default `1.0`), see [Building checks](#building-checks) |
 | `RIGS` | `{name: bone table}` beside the built-in `"humanoid"` |
 | `IMPORTS` | extra module names model modules may import |
 | `FPS` | frames per second of clips (default 30) |
@@ -156,6 +221,7 @@ Every key is optional.
 | `materials` | the most materials the model may use |
 | `sockets` | the socket kinds it must have, exactly |
 | `ground` | `(lo, hi)`: where a static model's lowest point must be (default `(-0.01, 0.01)`; `None` to skip) |
+| `footprint`, `overhang`, `height`, `fill`, `floating` | checks for a model on a tile: [Building checks](#building-checks) |
 | `join` | merge each group's parts into one mesh with several materials (fewer nodes, smaller files) |
 | `extras` | extra values on the root node, for the app |
 | `rig` | a rig name (`"humanoid"` or one of the project's `RIGS`); parts may then hang from bones |
@@ -180,7 +246,21 @@ Every key is optional.
 | `ring`, `section`, `loft`, `loft_fans` | rings of points lofted into torsos, hulls, bottles |
 | `tube`, `tube_rings`, `smooth_path` | tubes along (smoothed) polylines |
 | `offset_surface`, `mirrored_x`, `polyhedron` | shells, mirrors, anything else |
+| `prism`, `column`, `steps`, `gable`, `hip`, `pediment` | building shapes, see below |
 | `xf`, `basis`, `frame_to` | placement matrices |
+
+**Building shapes.** Each is one closed solid with its faces outwards, standing on z 0 and centred on x and y 0
+(lift or turn it with `loc=`, `rot=` or `m=`, like the other shapes). A bad argument fails the build, and the message
+says which rule it broke and by how much.
+
+| Shape | Makes | Example |
+|---|---|---|
+| `prism(outline, depth, axis="y")` | an outline extruded, centred on its axis: a lean-to roof in section, a floor plan | `geo.prism([(-1, 0), (1, 0), (1, 0.8), (-1, 0.5)], 2)` |
+| `column(r, h, n=12, flutes=0)` | a round base, a shaft that swells a third of the way up and narrows to the top, a round capital; `entasis`, `top`, `base` and `capital` shape it | `geo.column(0.05, 0.6, flutes=8)` |
+| `steps(size, n, rise, inset)` | a stylobate: `n` steps, each `inset` smaller on every side, its top at `n * rise` | `geo.steps((1.6, 1.8), 2, 0.06, 0.06)` |
+| `gable(w, l, rise, eave=0.035)` | a roof with its ridge along y and flat ends, the ridge `rise` above its base | `geo.gable(1.4, 1.8, 0.34)` |
+| `hip(w, l, rise, ridge=0.5)` | a roof sloping on all four sides; `ridge` is the ridge's share of `l` (0 is a pyramid) | `geo.hip(1.4, 1.8, 0.4, ridge=0.4)` |
+| `pediment(w, rise, t, inset=0.11)` | the triangular end of a gable, `rise` high and `t` thick, with its front field sunk | `geo.pediment(1.4, 0.34, 0.03, inset=0.06)` |
 
 **Materials.** `bp.material(name, "#rrggbb", finish=..., rough=, metal=, emit=, strength=, alpha=, double=,
 tint=, **extras)`. Each name is made once, and asking again with other settings fails the build. A `tint` marks a
@@ -219,6 +299,8 @@ On the built scene:
 - triangle budgets, the number of materials, and tint roles;
 - closed parts face outwards;
 - static models stand on the ground;
+- buildings, when the spec asks: footprint, height, fill and floating pieces (see
+  [Building checks](#building-checks));
 - sockets are exactly as the spec says;
 - skinned variants: 1 to 4 weights per vertex summing to 1, on bones the rig has, bound to the armature;
 - clips: they start at 0, loops end on their first pose, nothing sinks below the ground on any frame, and
@@ -231,6 +313,48 @@ On the written file:
   joints named for three.js (`upper_arm_L`), and embedded PNG textures.
 
 `--sheet` still renders when a check fails, so you can see what's wrong.
+
+## Building checks
+
+Five spec keys check the shape of a model that stands on a tile, such as a house, a farm or a wall. They are opt-in: a
+model without them is checked exactly as before.
+
+| Key | The rule |
+|---|---|
+| `footprint=(fx, fy)` | every vertex lies within plus or minus `f * TILE / 2 + overhang` of the origin, on x and on y |
+| `overhang` | metres a roof or an awning may reach past the footprint (default 0; needs `footprint`) |
+| `height` | the highest point is at most this many metres up |
+| `fill=(lo, hi)` | the plan's extent on each axis, as a share of the footprint (without the overhang), is `lo` to `hi` |
+| `floating` | metres: every piece touches the ground (z 0) or another piece's bounding box within this distance |
+
+`TILE` is a setting in `project.py`: the length of one tile's edge in metres, `1.0` unless you say otherwise. With the
+default, `footprint=(2, 2)` is a square of 2 m by 2 m centred on the origin.
+
+```python
+# project.py
+TILE = 2.0
+
+# models/house.py
+SPEC = dict(footprint=(1, 1), overhang=0.05, height=2.6, fill=(0.75, 0.95), floating=0.01)
+```
+
+Each failure names the rule and the amount:
+
+```
+farm: footprint: vertex at x = -1.015 is 0.015 past the tile edge (1.000)
+house: fill: the plan along x spans 1.460 m, 0.73 of the footprint (2.000 m); the range is 0.75 to 0.95 (1.500 to 1.900 m)
+tower: height: the highest point is at z = 2.700, 0.100 over the limit (2.600)
+shed: floating: a piece of part chimney around (0.300, 0.000, 1.325) is 0.150 m clear of the ground and of every other piece, at most 0.01 m allowed
+```
+
+- The footprint message names the worst vertex on each side that is over. Length rules are compared to within half a
+  millimetre, so rounding in the last digit never fails a build.
+- The checks measure the model as it stands in the scene, so a part that hangs from a bone counts where the rig puts it.
+- A piece is a set of faces that share vertices, so each primitive you add to a part is one piece, whether or not the
+  part is bevelled or joined. A piece inside another piece's bounding box counts as touching it, and two pieces that
+  touch each other but not the ground pass: the rule finds what hangs in the air, not every gap. The `ground` rule
+  still looks at the lowest point only.
+- Any key can come from `DEFAULTS` or `SPECS`. Set it to `None` in one model to turn it off there.
 
 ## What a glb looks like to the app
 
@@ -268,6 +392,7 @@ blendpipe build <project dir> <out dir>   build, check, export
     --sheet DIR       review sheets (also on failure)
     --thumbs          <id>.webp thumbnails beside the glbs
     --no-pack         Blender's export uncompressed, no gltfpack needed
+    --renderer R      auto, eevee or cycles for --sheet and --thumbs (default: $BLENDPIPE_RENDERER, else auto)
     --blender PATH    which Blender (default: $BLENDER, PATH, usual places)
     --verbose         all of Blender's output
 ```
@@ -313,6 +438,9 @@ npm install                                                     # gltfpack for t
 blender --background --factory-startup --python-exit-code 1 --python tools/run_tests.py    # inside Blender
 python3 -m unittest discover -s tests -t .                       # the CLI, and a full build twice: same bytes
 ```
+
+On Linux, GitHub Actions runs both on `ubuntu-latest` with a pinned, checksum-verified Blender
+(`.github/workflows/tests.yml`).
 
 ## License
 

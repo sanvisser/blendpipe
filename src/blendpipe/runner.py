@@ -11,17 +11,21 @@ Run inside Blender (the blendpipe CLI does this for you):
 
     blender --background --factory-startup --python-exit-code 1 --python tools/blender_build.py -- \\
         <project dir> <out dir> [--only id,id] [--sheet DIR] [--thumbs] [--no-pack]
+        [--renderer auto|eevee|cycles]
 
 <out dir>/<folder>/<id>.glb is written for each model (folder from its spec, default none), plus <id>-far.glb when
 its spec asks for a far level of detail and <id>.webp with --thumbs. --only builds, checks and writes only those
 models: the quick loop while making one. --sheet renders the review sheets into DIR, also when a check fails, so you
-can see what is wrong. --no-pack writes Blender's export uncompressed (no gltfpack needed).
+can see what is wrong. --no-pack writes Blender's export uncompressed (no gltfpack needed). --renderer (or
+$BLENDPIPE_RENDERER) picks what the sheets are rendered with: auto is EEVEE, or Cycles on the CPU where Blender
+gets no GPU (see render.choose_renderer).
 
 project.py may set:
     DEFAULTS     spec values every model starts from, e.g. dict(kb=64, tris=2000)
     SPECS        {id: spec} instead of (or on top of) each module's SPEC
     FINISHES     {name: dict(rough=, metal=, emit=, strength=)} for materials' finish=
     TINTS        {role: '#rrggbb'}: the tint roles materials may use, and how the sheets preview them
+    TILE         metres along one edge of a tile (default 1.0): what a spec's footprint=(fx, fy) is a multiple of
     RIGS         {name: bone table} beside the built-in "humanoid"
     IMPORTS      extra module names model modules may import
     FPS          frames per second (default 30)
@@ -44,18 +48,19 @@ from . import biped, checks, export, materials, render, rig, scene
 from .errors import BuildError
 from .model import Model
 from .skin import SkinModel
-from .tools import GLTFPACK_VERSION, MIN_BLENDER, TESTED_BLENDER
+from .tools import GLTFPACK_VERSION, MIN_BLENDER, RENDERERS, TESTED_BLENDER
 
 BUILTIN_RIGS = {"humanoid": biped.HUMANOID}
-USAGE = "usage: <project dir> <out dir> [--only id,id] [--sheet DIR] [--thumbs] [--no-pack]"
+USAGE = ("usage: <project dir> <out dir> [--only id,id] [--sheet DIR] [--thumbs] [--no-pack] "
+         "[--renderer auto|eevee|cycles]")
 
 
 def _options(argv):
     if len(argv) < 2 or argv[0].startswith("--") or argv[1].startswith("--"):
         raise BuildError(USAGE)
-    known = {"--only": True, "--sheet": True, "--thumbs": False, "--no-pack": False}
+    known = {"--only": True, "--sheet": True, "--renderer": True, "--thumbs": False, "--no-pack": False}
     out = {"project": os.path.abspath(argv[0]), "out": os.path.abspath(argv[1]), "only": None, "sheet": None,
-           "thumbs": False, "pack": True}
+           "thumbs": False, "pack": True, "renderer": os.environ.get("BLENDPIPE_RENDERER") or "auto"}
     i = 2
     while i < len(argv):
         a = argv[i]
@@ -67,12 +72,16 @@ def _options(argv):
             value = argv[i + 1]
             if a == "--only":
                 out["only"] = [v for v in value.split(",") if v]
+            elif a == "--renderer":
+                out["renderer"] = value
             else:
                 out["sheet"] = os.path.abspath(value)
             i += 2
         else:
             out["thumbs" if a == "--thumbs" else "pack"] = a == "--thumbs"
             i += 1
+    if out["renderer"] not in RENDERERS:
+        raise BuildError(f"the renderer is one of {', '.join(RENDERERS)}, not {out['renderer']}")
     return out
 
 
@@ -100,6 +109,9 @@ class Project:
         self.defaults = dict(get("DEFAULTS", {}))
         self.specs = dict(get("SPECS", {}))
         self.tints = get("TINTS", None)
+        self.tile = float(get("TILE", checks.DEFAULT_TILE))
+        if not self.tile > 0:
+            raise BuildError(f"TILE is {self.tile:g} m; it must be above 0")
         self.rigs = {**BUILTIN_RIGS, **get("RIGS", {})}
         self.fps = int(get("FPS", scene.FPS))
         self.total_kb = get("TOTAL_KB", None)
@@ -184,10 +196,10 @@ def main(project_dir, argv):
         print(f"built {mid}: {scene.triangles(m.meshes())} triangles"
               + (f", clips {sorted(m.clips)}" if m.clips else ""))
     for m in models:
-        checks.model(m, problems, project.tints)
+        checks.model(m, problems, project.tints, project.tile)
     if problems:
         if opts["sheet"]:
-            render.sheets(opts["sheet"], models, project.tints)
+            render.sheets(opts["sheet"], models, project.tints, renderer=opts["renderer"])
         raise BuildError(problems.text())
 
     cmd = None
@@ -222,11 +234,12 @@ def main(project_dir, argv):
 
     stage = None
     if opts["sheet"]:
-        stage = render.Stage(project.tints)
+        stage = render.Stage(project.tints, opts["renderer"])
         render.sheets(opts["sheet"], models, stage=stage)
     if opts["thumbs"]:
         paths = [os.path.join(opts["out"], m.spec.get("folder", ""), f"{m.id}.webp") for m in models]
-        render.thumbnails(models, paths, project.thumbnail, stage=stage or render.Stage(project.tints))
+        render.thumbnails(models, paths, project.thumbnail, tints=project.tints, stage=stage,
+                          renderer=opts["renderer"])
         for p in paths:
             print(f"wrote {os.path.relpath(p, opts['out'])}")
     print(f"done in {time.time() - t0:.1f} s")
