@@ -241,7 +241,21 @@ Every key is optional.
 | `ring`, `section`, `loft`, `loft_fans` | rings of points lofted into torsos, hulls, bottles |
 | `tube`, `tube_rings`, `smooth_path` | tubes along (smoothed) polylines |
 | `offset_surface`, `mirrored_x`, `polyhedron` | shells, mirrors, anything else |
+| `prism`, `column`, `steps`, `gable`, `hip`, `pediment` | building shapes, see below |
 | `xf`, `basis`, `frame_to` | placement matrices |
+
+**Building shapes.** Each is one closed solid with its faces outwards, standing on z 0 and centred on x and y 0
+(lift or turn it with `loc=`, `rot=` or `m=`, like the other shapes). A bad argument fails the build, and the message
+says which rule it broke and by how much.
+
+| Shape | Makes | Example |
+|---|---|---|
+| `prism(outline, depth, axis="y")` | an outline extruded, centred on its axis: a lean-to roof in section, a floor plan | `geo.prism([(-1, 0), (1, 0), (1, 0.8), (-1, 0.5)], 2)` |
+| `column(r, h, n=12, flutes=0)` | a round base, a shaft that swells a third of the way up and narrows to the top, a round capital; `entasis`, `top`, `base` and `capital` shape it | `geo.column(0.05, 0.6, flutes=8)` |
+| `steps(size, n, rise, inset)` | a stylobate: `n` steps, each `inset` smaller on every side, its top at `n * rise` | `geo.steps((1.6, 1.8), 2, 0.06, 0.06)` |
+| `gable(w, l, rise, eave=0.035)` | a roof with its ridge along y and flat ends, the ridge `rise` above its base | `geo.gable(1.4, 1.8, 0.34)` |
+| `hip(w, l, rise, ridge=0.5)` | a roof sloping on all four sides; `ridge` is the ridge's share of `l` (0 is a pyramid) | `geo.hip(1.4, 1.8, 0.4, ridge=0.4)` |
+| `pediment(w, rise, t, inset=0.11)` | the triangular end of a gable, `rise` high and `t` thick, with its front field sunk | `geo.pediment(1.4, 0.34, 0.03, inset=0.06)` |
 
 **Materials.** `bp.material(name, "#rrggbb", finish=..., rough=, metal=, emit=, strength=, alpha=, double=,
 tint=, **extras)`. Each name is made once, and asking again with other settings fails the build. A `tint` marks a
