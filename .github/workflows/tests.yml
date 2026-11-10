@@ -2,9 +2,10 @@ name: tests
 
 on:
   push:
-    branches: [initial]
+    branches: [initial, main]       # initial until the default branch moves to main
   pull_request:
   workflow_dispatch:
+  workflow_call:                    # release.yml runs the same tests before it builds anything
 
 permissions:
   contents: read
