@@ -25,6 +25,7 @@ project.py may set:
     SPECS        {id: spec} instead of (or on top of) each module's SPEC
     FINISHES     {name: dict(rough=, metal=, emit=, strength=)} for materials' finish=
     TINTS        {role: '#rrggbb'}: the tint roles materials may use, and how the sheets preview them
+    TILE         metres along one edge of a tile (default 1.0): what a spec's footprint=(fx, fy) is a multiple of
     RIGS         {name: bone table} beside the built-in "humanoid"
     IMPORTS      extra module names model modules may import
     FPS          frames per second (default 30)
@@ -108,6 +109,9 @@ class Project:
         self.defaults = dict(get("DEFAULTS", {}))
         self.specs = dict(get("SPECS", {}))
         self.tints = get("TINTS", None)
+        self.tile = float(get("TILE", checks.DEFAULT_TILE))
+        if not self.tile > 0:
+            raise BuildError(f"TILE is {self.tile:g} m; it must be above 0")
         self.rigs = {**BUILTIN_RIGS, **get("RIGS", {})}
         self.fps = int(get("FPS", scene.FPS))
         self.total_kb = get("TOTAL_KB", None)
@@ -192,7 +196,7 @@ def main(project_dir, argv):
         print(f"built {mid}: {scene.triangles(m.meshes())} triangles"
               + (f", clips {sorted(m.clips)}" if m.clips else ""))
     for m in models:
-        checks.model(m, problems, project.tints)
+        checks.model(m, problems, project.tints, project.tile)
     if problems:
         if opts["sheet"]:
             render.sheets(opts["sheet"], models, project.tints, renderer=opts["renderer"])
